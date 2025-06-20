@@ -4,6 +4,7 @@ import (
 	"context"
 	"controller/reader"
 	"controller/writer"
+	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -84,8 +85,12 @@ func setupDBConn(logger *zap.Logger) *pgxpool.Pool {
 
 func main() {
 
-	logger, _ := zap.NewProduction()
+	//Setting a context without a timeout since this main function should run forever
+	ctx := context.Background()
 
+	var logger *zap.Logger
+
+	//Configure the logger depending on app environment
 	env := os.Getenv("APP_ENV")
 
 	switch env {
@@ -94,7 +99,8 @@ func main() {
 	case "dev":
 		logger = createDevelopmentLogger()
 	default:
-		logger.Fatal("Requested environment is not valid", zap.String("env", env))
+		fmt.Printf("Logger creation failed, since an invalid app environment was specified: %s", env)
+		return
 	}
 
 	defer func(logger *zap.Logger) {
@@ -104,9 +110,27 @@ func main() {
 		}
 	}(logger)
 
+	//TODO maybe we have to wait here for the database to spin up and/or add retries
+
 	pool := setupDBConn(logger)
 
 	logger.Info("Logger initialized", zap.String("environment", env))
+
+	scheduler, reconciler := setupStructs(pool, logger)
+
+	isShadow := os.Getenv("SHADOW") == "true"
+
+	//Start the reconciler
+	if isShadow {
+		go func() {
+			reconciler.CheckControllerUp(ctx)
+		}()
+	}
+
+	//TODO implement the startup -> wait for
+}
+
+func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (Scheduler, Reconciler) {
 
 	dbWriter := writer.Writer{
 		Logger: logger.With(zap.String("util", "writer")),
@@ -130,9 +154,6 @@ func main() {
 		dbWriter: &dbWriter,
 	}
 
-	isShadow := os.Getenv("SHADOW") == "true"
+	return scheduler, reconciler
 
-	if isShadow {
-		reconciler.CheckControllerUp()
-	}
 }

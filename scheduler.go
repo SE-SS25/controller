@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"controller/reader"
-	database "controller/sqlc"
-	"controller/stringutils"
 	"controller/writer"
+	"errors"
+	"fmt"
 	"go.uber.org/zap"
-	"os"
-	"time"
+	"math"
 )
 
 type Scheduler struct {
@@ -17,82 +16,68 @@ type Scheduler struct {
 	dbWriter *writer.Writer
 }
 
-func (s *Scheduler) evaluateWorkerState(ctx context.Context) {
+// DbRange defines the ranges for the databases
+// For this to be compatible with the structure in the database BOTH points are INCLUSIVE
+type DbRange struct {
+	start string
+	end   string
+}
 
-	iterationTimeout, err := stringutils.ParseEnvDuration(os.Getenv("ITER_TIMEOUT"), s.logger)
+// CalculateStartupMapping maps the alphabetical ranges to the databases that are available at startup
+// It will fail if there are no databases available
+func (s *Scheduler) CalculateStartupMapping(ctx context.Context) {
+
+	count, err := s.dbReader.GetDBCount(ctx)
 	if err != nil {
-		return
-	}
-	timeout, err := stringutils.ParseEnvDuration("HEARTBEAT_TIMEOUT", s.logger)
-	if err != nil {
-		return
+		errW := fmt.Errorf("calculating startup mapping failed: %w", err)
+		s.logger.Error("error when calculating startup", zap.Error(errW)) //TODO retries yada yada
 	}
 
-	go func() {
-		for {
+	if count == 0 {
+		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("no workers registered in database"))
+		s.logger.Error("error when calculating startup mapping", zap.Error(errW))
+	}
 
-			state := s.dbReader.GetControllerState(ctx)
+	//initialize startup alphabet (a-z) without any 2nd-letter-level differentiation
+	var alphabet []string
 
-			var minimumUptime time.Duration
+	for i := 'a'; i <= 'z'; i++ {
+		alphabet = append(alphabet, string(i))
+	}
 
-			if !state.Scaling {
-				minimumUptime, err = stringutils.ParseEnvDuration(os.Getenv("MINIMUM_WORKER_UPTIME"), s.logger)
-				if err != nil {
-					return
-				}
-			}
+	calculateMapping(count, alphabet)
 
-			workers := s.dbReader.GetWorkerState(ctx)
+}
 
-			for _, worker := range workers {
+// calculateMapping calculates the mapping of the alphabetical ranges to the database at any point (e.g., when a new database is added / removed) -> it is universally usable and not just at startup
+func calculateMapping(dbCount int, alphabet []string) []DbRange {
 
-				if !workerHeartbeatOK(worker, timeout, s.logger) {
-					s.dbWriter.RemoveWorker(ctx, worker.Uuid)
-				}
+	dbRanges := make([]DbRange, 0, dbCount)
 
-				if !state.Scaling && worker.Uptime.Microseconds < minimumUptime.Microseconds() {
-					s.logger.Warn("Detected worker with unusually low uptime, trying again", zap.String("workerID", worker.Uuid.String()), zap.Duration("retryTimeout", time.Second))
+	//TODO this should be given so that we can reuse the function for non-startup calculation too
+	//var alphabet []string
+	//
+	//for i := 'a'; i <= 'z'; i++ {
+	//	alphabet = append(alphabet, string(i))
+	//}
 
-					//TODO
-				}
+	initialRangeCount := float64(len(alphabet))
 
-			}
+	//We calculate the "exact" (-> floating point) number of the split, and then round up so that we are guaranteed to have enough space in the last database for all entries
+	splitLength := initialRangeCount / float64(dbCount)
+	rangeCountPerDB := int(math.Ceil(splitLength))
 
-			time.Sleep(iterationTimeout)
+	for i, db := range dbRanges {
+		db.start = alphabet[i*rangeCountPerDB]
+
+		//if the last range is longer than the number of elements in our alphabet, then we set the length of the alphabet as the maximum upper bound (this will only ever apply to the last database
+		if (i+1)*rangeCountPerDB > len(alphabet)+1 {
+			db.end = alphabet[len(alphabet)+1]
+			continue
 		}
-	}()
-
-	if !state.Scaling {
-		go func() {
-
-		}()
+		db.end = alphabet[(i+1)*rangeCountPerDB]
 	}
 
-	//TODO implement metrics aggregation here somehow???
-
-}
-
-func workerHeartbeatOK(worker database.Workermetric, timeout time.Duration, logger *zap.Logger) bool {
-	uuid := worker.Uuid
-
-	logger.Debug("Reading data for worker", zap.String("uuid", uuid.String()))
-
-	timeSinceHeartbeat := time.Now().Sub(worker.LastHeartbeat.Time)
-
-	if timeSinceHeartbeat > timeout {
-		return false
-	}
-
-	return true
-}
-
-func workerUptimeOK(worker database.Workermetric) {
-
-	if !workersAreScaling() {
-
-	}
-}
-
-func workersAreScaling() {
+	return dbRanges
 
 }

@@ -2,7 +2,9 @@ package reader
 
 import (
 	"context"
+	"controller/dbutils"
 	database "controller/sqlc"
+	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -12,11 +14,11 @@ type Reader struct {
 	Logger *zap.Logger
 }
 
-func (r *Reader) GetWorkerState(ctx context.Context) []database.Workermetric {
+func (r *Reader) GetWorkerState(ctx context.Context) ([]database.Workermetric, error) {
 
-	conn, err := r.Pool.Acquire(ctx)
+	conn, err := dbutils.AcquireLock(ctx, r)
 	if err != nil {
-		r.Logger.Error("Could not get database connection") //TODO
+		return nil, fmt.Errorf("getting worker state failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -24,17 +26,17 @@ func (r *Reader) GetWorkerState(ctx context.Context) []database.Workermetric {
 	q := database.New(conn)
 	workers, err := q.GetWorkerState(ctx)
 	if err != nil {
-		r.Logger.Error("Could not retrieve worker state from db", zap.Error(err))
+		return nil, fmt.Errorf("getting worker state failed: %w", err)
 	}
 
-	return workers
+	return workers, nil
 }
 
-func (r *Reader) GetControllerState(ctx context.Context) database.Controllerstatus {
+func (r *Reader) GetControllerState(ctx context.Context) (database.Controllerstatus, error) {
 
-	conn, err := r.Pool.Acquire(ctx)
+	conn, err := dbutils.AcquireLock(ctx, r)
 	if err != nil {
-		r.Logger.Error("Could not get database connection") //TODO
+		return database.Controllerstatus{}, fmt.Errorf("getting controller state failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -42,8 +44,42 @@ func (r *Reader) GetControllerState(ctx context.Context) database.Controllerstat
 	q := database.New(conn)
 	state, err := q.GetControllerState(ctx)
 	if err != nil {
-		r.Logger.Error("Could not retrieve controller state", zap.Error(err))
+		return database.Controllerstatus{}, fmt.Errorf("getting controller state failed: %w", err)
 	}
 
-	return state
+	return state, nil
+}
+
+func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
+	conn, err := r.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting worker count failed: %w", err)
+	}
+
+	defer conn.Release()
+
+	q := database.New(conn)
+	count, err := q.GetWorkerCount(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting worker count failed: %w", err)
+	}
+
+	return int(count), nil
+}
+
+func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
+	conn, err := r.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting db count failed: %w", err)
+	}
+
+	defer conn.Release()
+
+	q := database.New(conn)
+	count, err := q.GetDatabaseCount(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting db count failed: %w", err)
+	}
+
+	return int(count), nil
 }
