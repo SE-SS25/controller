@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"controller/reader"
+	database2 "controller/database"
 	database "controller/sqlc"
 	"controller/stringutils"
-	"controller/writer"
 	"fmt"
 	"go.uber.org/zap"
 	"os"
@@ -14,8 +13,8 @@ import (
 
 type Reconciler struct {
 	logger   *zap.Logger
-	dbReader *reader.Reader
-	dbWriter *writer.Writer
+	dbReader *database2.Reader
+	dbWriter *database2.Writer
 }
 
 // CheckControllerUp checks if the controller has a valid heartbeat and if not, activates the shadow as the new controller

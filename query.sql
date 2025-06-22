@@ -1,15 +1,29 @@
 -- name: GetWorkerState :many
-SELECT * FROM WorkerMetrics;
+SELECT * FROM worker_metric;
 
 -- name: GetControllerState :one
-SELECT * FROM ControllerStatus
+SELECT * FROM controller_status
 LIMIT 1;
 
 -- name: GetDatabaseCount :one
-SELECT DISTINCT COUNT(url) FROM DatabaseMapping;
+SELECT DISTINCT COUNT(url) FROM db_mapping;
+
+SELECT DISTINCT url FROM db_mapping;
 
 -- name: GetWorkerCount :one
-SELECT COUNT(uuid) FROM WorkerMetrics;
+SELECT COUNT(id) FROM worker_metric;
+
+
+
 
 -- name: DeleteWorker :exec
-DELETE FROM WorkerMetrics WHERE uuid=$1;
+DELETE FROM worker_metric WHERE id=$1;
+
+-- name: CreateMapping :exec
+INSERT INTO db_mapping(id, url, "from", "to")
+VALUES ($1, $2, $3, $4);
+
+-- name: CreateMigrationJob :exec
+INSERT INTO db_migration(id, m_worker_id, url, "from", "to")
+SELECT db_mapping.id, $2, db_mapping.url, db_mapping."from", db_mapping."to" FROM db_mapping
+WHERE db_mapping.id=$1;

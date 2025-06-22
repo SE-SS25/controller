@@ -2,12 +2,11 @@ package dbutils
 
 import (
 	"context"
-	"controller/reader"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func AcquireLock(ctx context.Context, r *reader.Reader) (*pgxpool.Conn, error) {
+func AcquireLock(ctx context.Context, pool *pgxpool.Pool) (*pgxpool.Conn, error) {
 
-	conn, err := r.Pool.Acquire(ctx)
+	conn, err := pool.Acquire(ctx)
 	return conn, err
 }

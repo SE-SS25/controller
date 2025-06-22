@@ -1,8 +1,10 @@
-CREATE TABLE WorkerMetrics
+CREATE
+EXTENSION "uuid-ossp";
+CREATE TABLE worker_metric
 (
-    uuid            UUID PRIMARY KEY,
+    id              UUID PRIMARY KEY,
     last_heartbeat  TIMESTAMP,
-    uptime          INTERVAL,
+    uptime INTERVAL,
     req_per_sec     INT,
     write_per_sec   INT,
     read_per_sec    INT,
@@ -10,49 +12,44 @@ CREATE TABLE WorkerMetrics
     req_failed      BIGINT,
     db_availability REAL
 );
-
-CREATE TABLE ControllerStatus
+CREATE TABLE controller_status
 (
     scaling        BOOL NOT NULL DEFAULT false,
     last_heartbeat TIMESTAMP
 );
-
-CREATE TABLE MigrationWorkers
+CREATE TABLE migration_worker
 (
-    uuid            UUID PRIMARY KEY,
+    id              UUID PRIMARY KEY,
     last_heartbeat  TIMESTAMP,
-    uptime          INTERVAL,
+    uptime INTERVAL,
     working_on_from TEXT,
     working_on_to   TEXT
 );
-
-CREATE TABLE Monitors
+CREATE TABLE monitor
 (
-    "uuid"         UUID PRIMARY KEY,
+    id             UUID PRIMARY KEY,
     last_heartbeat TIMESTAMP,
     url            TEXT NOT NULL
 );
-
-CREATE TABLE DbConnError
+CREATE TABLE db_mapping
 (
-    worker_id    UUID REFERENCES WorkerMetrics (uuid),
-    db_id        UUID REFERENCES DatabaseMetrics (uuid),
-    failure_time TIMESTAMP,
-    PRIMARY KEY (worker_id, db_id, failure_time)
+    id     UUID PRIMARY KEY,
+    url    TEXT NOT NULL,
+    "from" TEXT NOT NULL UNIQUE,
+    "to"   TEXT NOT NULL UNIQUE
 );
-
-CREATE TABLE DatabaseMapping
+CREATE TABLE db_conn_err
 (
-    url    TEXT,
-    "from" TEXT UNIQUE,
-    "to"   TEXT UNIQUE,
-    PRIMARY KEY ("from", "to")
+    worker_id UUID REFERENCES worker_metric (id),
+    db_id     UUID REFERENCES db_mapping (id),
+    fail_time TIMESTAMP NOT NULL,
+    PRIMARY KEY (worker_id, db_id, fail_time)
 );
-
-CREATE TABLE Migrations
+CREATE TABLE db_migration
 (
-    url    TEXT,
-    "from" TEXT UNIQUE,
-    "to"   TEXT UNIQUE,
-    PRIMARY KEY ("from", "to")
+    id          UUID PRIMARY KEY,
+    m_worker_id UUID NOT NULL UNIQUE references migration_worker(id),
+    url         TEXT NOT NULL,
+    "from"      TEXT NOT NULL UNIQUE,
+    "to"        TEXT NOT NULL UNIQUE
 );

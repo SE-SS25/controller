@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"controller/reader"
-	"controller/writer"
+	"controller/database"
+	"controller/docker"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -120,32 +120,42 @@ func main() {
 
 	isShadow := os.Getenv("SHADOW") == "true"
 
-	//Start the reconciler
+	//If this controller is the shadow, it should get stuck in this loop
 	if isShadow {
-		go func() {
-			reconciler.CheckControllerUp(ctx)
-		}()
+		reconciler.CheckControllerUp(ctx)
 	}
+
+	mapping := scheduler.CalculateStartupMapping(ctx)
+
+	scheduler.ExecuteStartUpMapping(ctx, mapping)
 
 	//TODO implement the startup -> wait for
 }
 
 func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (Scheduler, Reconciler) {
 
-	dbWriter := writer.Writer{
+	//TODO im not sure if reader, writer and dockercli actually need a logger
+
+	dbWriter := database.Writer{
 		Logger: logger.With(zap.String("util", "writer")),
 		Pool:   pool,
 	}
 
-	dbReader := reader.Reader{
+	dbReader := database.Reader{
 		Logger: logger.With(zap.String("util", "reader")),
 		Pool:   pool,
 	}
 
+	dockerInterface, err := docker.New(logger)
+	if err != nil {
+		logger.Error("could not create docker interface", zap.Error(err))
+	}
+
 	scheduler := Scheduler{
-		logger:   logger.With(zap.String("component", "scheduler")),
-		dbWriter: &dbWriter,
-		dbReader: &dbReader,
+		logger:          logger.With(zap.String("component", "scheduler")),
+		dbWriter:        &dbWriter,
+		dbReader:        &dbReader,
+		dockerInterface: dockerInterface,
 	}
 
 	reconciler := Reconciler{
@@ -155,5 +165,4 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (Scheduler, Reconciler
 	}
 
 	return scheduler, reconciler
-
 }
