@@ -8,8 +8,9 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/daemon/config"
 	"github.com/docker/go-connections/nat"
+	"github.com/goforj/godump"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"os"
 )
@@ -39,22 +40,37 @@ func New(logger *zap.Logger) (DInterface, error) {
 func (c *DInterface) StartMigrationWorker(ctx context.Context) error {
 
 	imageTag := os.Getenv("M_WORKER_IMAGE_TAG")
-	//TODO what to do with reader output
-	reader, err := c.client.ImagePull(ctx, imageTag, image.PullOptions{})
+
+	//name the container with prefix and shortened uuid
+	containerNamePrefix := os.Getenv("M_WORKER_CONTAINER_PREFIX")
+	shortenedUUID := uuid.New().String()[0:8]
+	containerName := containerNamePrefix + "-" + shortenedUUID
+
+	_, err := c.client.ImagePull(ctx, imageTag, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("could not pull image tag for migration worker %w", err)
 	}
 
-	//TODO maybe lofg this info somewhere? do i want this component to log?
+	containerConfig := createContainerConfig(imageTag)
+	hostConfig := createHostConfig()
+
 	createInfo, err := c.client.ContainerCreate(ctx, createContainerConfig(imageTag), createHostConfig(), &network.NetworkingConfig{}, nil, "containerName") //TODO
 	if err != nil {
 		return fmt.Errorf("could not create container: %w", err)
 	}
 
-	err = c.client.ContainerStart(ctx, "containerName", container.StartOptions{})
+	c.Logger.Debug("successfully created docker container for migration worker",
+		zap.String("info", godump.DumpStr(createInfo)),
+		zap.String("containerConfig", godump.DumpStr(containerConfig)),
+		zap.String("hostConfig", godump.DumpStr(hostConfig)),
+	)
+
+	err = c.client.ContainerStart(ctx, containerName, container.StartOptions{})
 	if err != nil {
 		return fmt.Errorf("could not start container: %w", err)
 	}
+
+	c.Logger.Debug("successfully started migration worker", zap.String("containerName", containerName))
 
 	return nil
 

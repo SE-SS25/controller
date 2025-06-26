@@ -1,4 +1,4 @@
-package main
+package components
 
 import (
 	"context"
@@ -13,14 +13,24 @@ import (
 
 type Scheduler struct {
 	logger          *zap.Logger
-	dbReader        *database.Reader
-	dbWriter        *database.Writer
+	readerPerf      *database.ReaderPerfectionist
+	writerPerf      *database.WriterPerfectionist
 	dockerInterface docker.DInterface
+}
+
+func NewScheduler(logger *zap.Logger, readerPerf *database.ReaderPerfectionist, writerPerf *database.WriterPerfectionist, dockerInterface docker.DInterface) Scheduler {
+	return Scheduler{
+		logger:          logger,
+		readerPerf:      readerPerf,
+		writerPerf:      writerPerf,
+		dockerInterface: dockerInterface,
+	}
 }
 
 // DbRange defines the alphabetical ranges for the databases
 // For this to be compatible with the structure in the database BOTH points are INCLUSIVE
 type DbRange struct {
+	url   string
 	start string
 	end   string
 }
@@ -33,10 +43,10 @@ type UrlToRangeMap map[string][]DbRange
 // Since there is no data yet, this does not have to be considered when mapping the ranges, which is why this algorithm is different from the ones that run when the databases are filled
 func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeMap {
 
-	dbCount, err := s.dbReader.GetDBCount(ctx)
+	dbCount, err := s.readerPerf.GetDBCount(ctx)
 	if err != nil {
 		errW := fmt.Errorf("calculating startup mapping failed: %w", err)
-		s.logger.Error("error when calculating startup", zap.Error(errW)) //TODO retries yada yada
+		s.logger.Error("error when calculating startup", zap.Error(errW))
 	}
 
 	if dbCount == 0 {
@@ -99,29 +109,42 @@ func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRan
 
 	var err error
 
+	//TODO maybe do this in one query
+
 	for url, dbRanges := range rangeMap {
 		for _, dbRange := range dbRanges {
-			err = s.dbWriter.AddDatabaseMapping(ctx, url, dbRange.start, dbRange.end)
+
+			err = s.writerPerf.AddDatabaseMapping(dbRange.start, dbRange.end, url, ctx)
 			if err != nil {
 				s.logger.Warn("Could not write mapping to database", zap.String("url", url), zap.String("start", dbRange.start), zap.String("end", dbRange.end))
-				//TODO at which level do i want to do retries
 			}
 		}
 	}
 }
 
-func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) {
+func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
+
+	//TODO creating a new migration worker everytime we have a migration is inefficient, we should check if they still exist and if they do give them a few seconds to start processing the migration
+	//BUT how can we check if the migration is in processing -> maybe processing status
 
 	//Create an id for the migration worker we are about to create
 	migrationWorkerId := uuid.New().String()
 
 	//copy the given rangeID from the mappings-table to the migrations-table and specify the worker that is responsible
-	err := s.dbWriter.AddMigrationJob(ctx, rangeId, migrationWorkerId)
-	if err != nil {
-		errW := fmt.Errorf("running migration failed: %w", err)
+	jobErr := s.writerPerf.AddMigrationJob(ctx, rangeId, migrationWorkerId)
+	if jobErr != nil {
+		errW := fmt.Errorf("running migration failed: %w", jobErr)
 		s.logger.Error("could not migrate db-range", zap.Error(errW))
+		return errW
 	}
 
 	//create a worker and assign it an id, then assign the job to it (create uuid in beginning and use it for both)
 
+	spawnErr := s.dockerInterface.StartMigrationWorker(ctx)
+	if spawnErr != nil {
+		errW := fmt.Errorf("spawning migration worker failed: %w", spawnErr)
+		s.logger.Error("could not migrate db-range", zap.Error(errW))
+	}
+
+	return nil
 }

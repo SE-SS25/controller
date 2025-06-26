@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"controller/components"
 	"controller/database"
 	"controller/docker"
+	"controller/envutils"
+	customErr "controller/errors"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
+	"net/http"
 	"os"
 	"time"
 )
@@ -65,10 +70,10 @@ func setupDBConn(logger *zap.Logger) *pgxpool.Pool {
 
 	ctx := context.Background()
 
-	pg_conn := os.Getenv("PG_CONN")
-	logger.Debug("Connecting to database", zap.String("conn_string", pg_conn))
+	pgConn := os.Getenv("PG_CONN")
+	logger.Debug("Connecting to database", zap.String("conn_string", pgConn))
 
-	pool, err := pgxpool.New(ctx, pg_conn)
+	pool, err := pgxpool.New(ctx, pgConn)
 	if err != nil {
 		logger.Error("Unable to connect to database", zap.Error(err)) //TODO retries here, if yes how can i best do it
 	}
@@ -77,7 +82,7 @@ func setupDBConn(logger *zap.Logger) *pgxpool.Pool {
 		logger.Error("Unable to ping database", zap.Error(err))
 	}
 
-	logger.Info("Connected to PG database", zap.String("conn", pg_conn))
+	logger.Info("Connected to PG database", zap.String("conn", pgConn))
 
 	return pool
 
@@ -94,6 +99,7 @@ func main() {
 	env := os.Getenv("APP_ENV")
 
 	switch env {
+	//Get max retries from env and transform to int
 	case "prod":
 		logger = createProductionLogger()
 	case "dev":
@@ -116,13 +122,34 @@ func main() {
 
 	logger.Info("Logger initialized", zap.String("environment", env))
 
-	scheduler, reconciler := setupStructs(pool, logger)
+	scheduler, reconciler, gauntlet := setupStructs(pool, logger)
 
 	isShadow := os.Getenv("SHADOW") == "true"
 
+	maxRetries := envutils.ParseEnvInt("MAX_RETRIES", 3, logger)
+	iterationTimeout := envutils.ParseEnvDuration(os.Getenv("ITER_TIMEOUT"), time.Second, logger)
+	timeout := envutils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
+
 	//If this controller is the shadow, it should get stuck in this loop
 	if isShadow {
-		reconciler.CheckControllerUp(ctx)
+		shadowErr := reconciler.CheckControllerUp(ctx)
+
+		if !errors.Is(shadowErr, &customErr.ControllerCrashed{}) {
+			logger.Fatal("shadow reconciliation loop failed", zap.Error(shadowErr))
+		}
+
+	}
+
+	reconciler.EvaluateWorkerState(ctx, maxRetries, iterationTimeout, timeout)
+
+	//TODO how do we put the shadow in control
+
+	http.Handle("/migrate", gauntlet.migrationHandler())
+
+	err := http.ListenAndServe(":1234", nil)
+	if err != nil {
+		logger.Error("serving http traffic failed", zap.Error(err))
+		return
 	}
 
 	mapping := scheduler.CalculateStartupMapping(ctx)
@@ -132,9 +159,9 @@ func main() {
 	//TODO implement the startup -> wait for
 }
 
-func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (Scheduler, Reconciler) {
-
-	//TODO im not sure if reader, writer and dockercli actually need a logger
+// setupStructs sets up all structs needed for functionality in the worker.
+// The loggers in reader, writer, and docker should only be used for debug level statements
+func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler, components.Reconciler, InfinityGauntlet) {
 
 	dbWriter := database.Writer{
 		Logger: logger.With(zap.String("util", "writer")),
@@ -146,23 +173,40 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (Scheduler, Reconciler
 		Pool:   pool,
 	}
 
+	maxRetries := envutils.ParseEnvInt("MAX_RETRIES", 3, logger)
+
+	writerPerfectionist := database.NewWriterPerfectionist(
+		dbWriter,
+		maxRetries,
+	)
+
+	readerPerfectionist := database.NewReaderPerfectionist(
+		dbReader,
+		maxRetries)
+
 	dockerInterface, err := docker.New(logger)
 	if err != nil {
 		logger.Error("could not create docker interface", zap.Error(err))
 	}
 
-	scheduler := Scheduler{
-		logger:          logger.With(zap.String("component", "scheduler")),
-		dbWriter:        &dbWriter,
-		dbReader:        &dbReader,
-		dockerInterface: dockerInterface,
+	scheduler := components.NewScheduler(
+		logger.With(zap.String("component", "scheduler")),
+		readerPerfectionist,
+		writerPerfectionist,
+		dockerInterface,
+	)
+
+	reconciler := components.NewReconciler(
+		logger.With(zap.String("component", "reconciler")),
+		readerPerfectionist,
+		writerPerfectionist,
+	)
+
+	gauntlet := InfinityGauntlet{
+		scheduler:  scheduler,
+		reconciler: reconciler,
+		logger:     logger.With(zap.String("component", "httpHandler")),
 	}
 
-	reconciler := Reconciler{
-		logger:   logger.With(zap.String("component", "reconciler")),
-		dbReader: &dbReader,
-		dbWriter: &dbWriter,
-	}
-
-	return scheduler, reconciler
+	return scheduler, reconciler, gauntlet
 }

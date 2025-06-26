@@ -1,5 +1,10 @@
--- name: GetWorkerState :many
+-- name: GetAllWorkerState :many
 SELECT * FROM worker_metric;
+
+-- name: GetSingleWorkerState :one
+SELECT * FROM worker_metric
+WHERE worker_metric.id = $1
+LIMIT 1;
 
 -- name: GetControllerState :one
 SELECT * FROM controller_status
@@ -7,8 +12,6 @@ LIMIT 1;
 
 -- name: GetDatabaseCount :one
 SELECT DISTINCT COUNT(url) FROM db_mapping;
-
-SELECT DISTINCT url FROM db_mapping;
 
 -- name: GetWorkerCount :one
 SELECT COUNT(id) FROM worker_metric;

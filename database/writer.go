@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	db "controller/sqlc"
+	database "controller/database/sqlc"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -22,7 +22,7 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 		return fmt.Errorf("removing worker failed: %w", err)
 	}
 
-	q := db.New(conn)
+	q := database.New(conn)
 	err = q.DeleteWorker(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("removing worker failed: %w", err)
@@ -32,15 +32,15 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 
 }
 
-func (w *Writer) AddDatabaseMapping(ctx context.Context, url, from, to string) error {
+func (w *Writer) AddDatabaseMapping(from, to, url string, ctx context.Context) error {
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("adding database mapping failed: %w", err)
 	}
 
-	q := db.New(conn)
-	params := db.CreateMappingParams{
+	q := database.New(conn)
+	params := database.CreateMappingParams{
 		ID: pgtype.UUID{
 			Bytes: uuid.New(),
 			Valid: true,
@@ -65,8 +65,8 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 		return fmt.Errorf("adding migration job to database failed %w", err)
 	}
 
-	q := db.New(conn)
-	params := db.CreateMigrationJobParams{
+	q := database.New(conn)
+	params := database.CreateMigrationJobParams{
 		ID: pgtype.UUID{
 			Bytes: [16]byte([]byte(rangeId)),
 			Valid: true,
