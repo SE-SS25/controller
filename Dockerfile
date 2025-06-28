@@ -1,1 +1,0 @@
-FROM golang1.24

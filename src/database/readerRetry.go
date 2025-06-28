@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	sqlc "controller/database/sqlc"
+	sqlc "controller/src/database/sqlc"
 	"go.uber.org/zap"
 )
 
@@ -16,6 +16,26 @@ func NewReaderPerfectionist(reader Reader, maxRetries int) *ReaderPerfectionist 
 		reader:     reader,
 		maxRetries: maxRetries,
 	}
+}
+
+func (r *ReaderPerfectionist) Ping(ctx context.Context) error {
+
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		err := r.reader.Ping(ctx)
+		if err == nil {
+			return nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("pinging database failed; retrying...", zap.Int("try", i), zap.Error(err))
+		}
+	}
+
+	r.reader.Logger.Error("getting controller state failed, retry limit reached", zap.Error(err))
+	return err
+
 }
 
 func (r *ReaderPerfectionist) GetControllerState(ctx context.Context) (sqlc.ControllerStatus, error) {
@@ -92,4 +112,22 @@ func (r *ReaderPerfectionist) GetDBCount(ctx context.Context) (int, error) {
 
 	r.reader.Logger.Error("getting workers state failed, retry limit reached", zap.Error(err))
 	return 0, err
+}
+
+func (r *ReaderPerfectionist) GetDBConnErrors(ctx context.Context) ([]sqlc.DbConnErr, error) {
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		connErrors, err := r.reader.GetDBConnErrors(ctx)
+		if err == nil {
+			return connErrors, nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("getting db connection errors failed; retrying...", zap.Int("try", i), zap.Error(err))
+		}
+	}
+
+	r.reader.Logger.Error("getting db connection errors failed, retry limit reached", zap.Error(err))
+	return nil, err
 }

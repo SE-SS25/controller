@@ -2,19 +2,22 @@ package main
 
 import (
 	"context"
-	"controller/components"
-	"controller/database"
-	"controller/docker"
-	"controller/envutils"
-	customErr "controller/errors"
+	"controller/gomigrate"
+	"controller/src/components"
+	"controller/src/database"
+	"controller/src/dbutils"
+	"controller/src/docker"
+	"controller/src/envutils"
+	customErr "controller/src/errors"
 	"errors"
 	"fmt"
+	"github.com/goforj/godump"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -45,7 +48,12 @@ func createProductionLogger() *zap.Logger {
 		zapcore.NewCore(fileEncoder, file, level),
 	)
 
-	return zap.New(core)
+	logger := zap.New(core)
+
+	logger.Info("Production logger created")
+	godump.Dump(core)
+
+	return logger
 }
 
 func createDevelopmentLogger() *zap.Logger {
@@ -63,34 +71,17 @@ func createDevelopmentLogger() *zap.Logger {
 		},
 	}
 
-	return zap.Must(config.Build())
-}
+	logger := zap.Must(config.Build())
 
-func setupDBConn(logger *zap.Logger) *pgxpool.Pool {
+	logger.Info("Development logger created")
+	godump.Dump(logger.Core())
 
-	ctx := context.Background()
-
-	pgConn := os.Getenv("PG_CONN")
-	logger.Debug("Connecting to database", zap.String("conn_string", pgConn))
-
-	pool, err := pgxpool.New(ctx, pgConn)
-	if err != nil {
-		logger.Error("Unable to connect to database", zap.Error(err)) //TODO retries here, if yes how can i best do it
-	}
-
-	if err = pool.Ping(ctx); err != nil {
-		logger.Error("Unable to ping database", zap.Error(err))
-	}
-
-	logger.Info("Connected to PG database", zap.String("conn", pgConn))
-
-	return pool
-
+	return logger
 }
 
 func main() {
 
-	//Setting a context without a timeout since this main function should run forever
+	//Setting a context without a timeout since this main function should (optimally) run forever
 	ctx := context.Background()
 
 	var logger *zap.Logger
@@ -99,7 +90,6 @@ func main() {
 	env := os.Getenv("APP_ENV")
 
 	switch env {
-	//Get max retries from env and transform to int
 	case "prod":
 		logger = createProductionLogger()
 	case "dev":
@@ -116,52 +106,79 @@ func main() {
 		}
 	}(logger)
 
-	//TODO maybe we have to wait here for the database to spin up and/or add retries
+	pool, err := dbutils.SetupDBConn(logger, ctx)
+	if err != nil {
+		logger.Fatal("establishing connection to database failed, controller is fucking useless, stopping...", zap.Error(err))
+		return
+		//TODO retries
+	}
 
-	pool := setupDBConn(logger)
+	if env == "dev" {
+		err = gomigrate.Migrate()
+		if err != nil {
+			logger.Error("error occurred during migrations", zap.Error(err))
+			return
+		}
+	}
 
 	logger.Info("Logger initialized", zap.String("environment", env))
 
-	scheduler, reconciler, gauntlet := setupStructs(pool, logger)
+	scheduler, reconciler, controller := setupStructs(pool, logger)
 
-	isShadow := os.Getenv("SHADOW") == "true"
+	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
 
-	maxRetries := envutils.ParseEnvInt("MAX_RETRIES", 3, logger)
-	iterationTimeout := envutils.ParseEnvDuration(os.Getenv("ITER_TIMEOUT"), time.Second, logger)
-	timeout := envutils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
+	iterationTimeout := envutils.ParseEnvDuration("ITER_TIMEOUT", time.Second, logger)
+
+	go func() {
+		controller.RunHttpServer()
+	}()
 
 	//If this controller is the shadow, it should get stuck in this loop
-	if isShadow {
+	for controller.isShadow {
 		shadowErr := reconciler.CheckControllerUp(ctx)
 
 		if !errors.Is(shadowErr, &customErr.ControllerCrashed{}) {
 			logger.Fatal("shadow reconciliation loop failed", zap.Error(shadowErr))
+			setEnvErr := os.Setenv("SHADOW", "false")
+			if setEnvErr != nil {
+				logger.Warn("could not change `SHADOW` environment variable after taking over as controller")
+			}
+			controller.isShadow = false //Put the shadow in control
 		}
-
 	}
 
-	reconciler.EvaluateWorkerState(ctx, maxRetries, iterationTimeout, timeout)
+	timeout := envutils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 
-	//TODO how do we put the shadow in control
+	// Function to evaluate worker state
+	go func() {
+		err := reconciler.EvaluateWorkerState(ctx, timeout)
+		if err != nil {
+			//Since there is no writing happening, we can kill the controller here so the shadow can step in
+			logger.Fatal("fatal error evaluating worker state", zap.Error(err))
+		}
+		time.Sleep(iterationTimeout)
+	}()
 
-	http.Handle("/migrate", gauntlet.migrationHandler())
-
-	err := http.ListenAndServe(":1234", nil)
-	if err != nil {
-		logger.Error("serving http traffic failed", zap.Error(err))
-		return
-	}
+	//Function to evaluate failure rate in mongo-worker relationships
+	go func() {
+		checkFailureRateErr := reconciler.CheckFailureRate(ctx)
+		if checkFailureRateErr != nil {
+			logger.Fatal("fatal error checking failure rates")
+		}
+		time.Sleep(5 * time.Minute)
+	}()
 
 	mapping := scheduler.CalculateStartupMapping(ctx)
 
 	scheduler.ExecuteStartUpMapping(ctx, mapping)
 
+	select {}
 	//TODO implement the startup -> wait for
 }
 
 // setupStructs sets up all structs needed for functionality in the worker.
 // The loggers in reader, writer, and docker should only be used for debug level statements
-func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler, components.Reconciler, InfinityGauntlet) {
+func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler, components.Reconciler, Controller) {
 
 	dbWriter := database.Writer{
 		Logger: logger.With(zap.String("util", "writer")),
@@ -202,7 +219,7 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 		writerPerfectionist,
 	)
 
-	gauntlet := InfinityGauntlet{
+	gauntlet := Controller{
 		scheduler:  scheduler,
 		reconciler: reconciler,
 		logger:     logger.With(zap.String("component", "httpHandler")),
@@ -210,3 +227,5 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 
 	return scheduler, reconciler, gauntlet
 }
+
+re

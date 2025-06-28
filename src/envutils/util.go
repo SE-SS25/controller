@@ -24,6 +24,8 @@ func ParseEnvInt(env string, intDefault int, logger *zap.Logger) int {
 
 	retriesString := os.Getenv(env)
 
+	logger.Debug("got env variable", zap.String("variable", env), zap.String("value", retriesString))
+
 	retries, err := strconv.Atoi(retriesString)
 	if err != nil {
 		logger.Warn("Could not parse from .env, setting default", zap.String("variable", env), zap.Int("default", intDefault), zap.Error(err))
@@ -31,4 +33,14 @@ func ParseEnvInt(env string, intDefault int, logger *zap.Logger) int {
 	}
 
 	return retries
+}
+func SetShadowPort(portString string) (string, error) {
+	portInt, err := strconv.Atoi(portString)
+	if err != nil {
+		return "", err
+	}
+
+	portInt++
+
+	return strconv.Itoa(portInt), nil
 }

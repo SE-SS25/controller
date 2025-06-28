@@ -2,8 +2,8 @@ package database
 
 import (
 	"context"
-	database "controller/database/sqlc"
-	"controller/dbutils"
+	database "controller/src/database/sqlc"
+	"controller/src/dbutils"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,6 +13,18 @@ import (
 type Reader struct {
 	Pool   *pgxpool.Pool
 	Logger *zap.Logger
+}
+
+func (r *Reader) Ping(ctx context.Context) error {
+
+	r.Logger.Debug("Trying to ping database")
+
+	err := r.Pool.Ping(ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric, error) {
@@ -110,4 +122,22 @@ func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 	}
 
 	return int(count), nil
+}
+
+func (r *Reader) GetDBConnErrors(ctx context.Context) ([]database.DbConnErr, error) {
+
+	conn, err := r.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting db_conn_errors failed: %w", err)
+	}
+
+	defer conn.Release()
+
+	q := database.New(conn)
+	connectionErrors, err := q.GetAllDbConnErrors(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting db_conn_errors failed: %w", err)
+	}
+
+	return connectionErrors, nil
 }

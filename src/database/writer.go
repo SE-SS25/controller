@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	database "controller/database/sqlc"
+	database "controller/src/database/sqlc"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,7 +32,7 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 
 }
 
-func (w *Writer) AddDatabaseMapping(from, to, url string, ctx context.Context) error {
+func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error {
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
@@ -47,7 +47,6 @@ func (w *Writer) AddDatabaseMapping(from, to, url string, ctx context.Context) e
 		},
 		Url:  url,
 		From: from,
-		To:   to,
 	}
 	err = q.CreateMapping(ctx, params)
 	if err != nil {
@@ -79,6 +78,27 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 	err = q.CreateMigrationJob(ctx, params)
 	if err != nil {
 		return fmt.Errorf("adding migration job to database failed %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamp) error {
+	conn, err := w.Pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("removing outdated dbConnErr from database failed %w", err)
+	}
+
+	q := database.New(conn)
+	params := database.DeleteDBConnErrorParams{
+		DbUrl:    dbUrl,
+		WorkerID: workerId,
+		FailTime: failTime,
+	}
+
+	deletionErr := q.DeleteDBConnError(ctx, params)
+	if deletionErr != nil {
+		return fmt.Errorf("removing outdated dbConnErr from database failed %w", err)
 	}
 
 	return nil

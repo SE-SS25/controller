@@ -2,8 +2,8 @@ package components
 
 import (
 	"context"
-	"controller/database"
-	"controller/docker"
+	"controller/src/database"
+	"controller/src/docker"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -27,21 +27,13 @@ func NewScheduler(logger *zap.Logger, readerPerf *database.ReaderPerfectionist, 
 	}
 }
 
-// DbRange defines the alphabetical ranges for the databases
-// For this to be compatible with the structure in the database BOTH points are INCLUSIVE
-type DbRange struct {
-	url   string
-	start string
-	end   string
-}
-
-// UrlToRangeMap maps from a
-type UrlToRangeMap map[string][]DbRange
+// UrlToRangeStartMap maps from the url to the start of the range it covers
+type UrlToRangeStartMap map[string][]string
 
 // CalculateStartupMapping maps the alphabetical ranges to the databases that are available at startup.
 // It will fail if there are no databases available.
 // Since there is no data yet, this does not have to be considered when mapping the ranges, which is why this algorithm is different from the ones that run when the databases are filled
-func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeMap {
+func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStartMap {
 
 	dbCount, err := s.readerPerf.GetDBCount(ctx)
 	if err != nil {
@@ -68,7 +60,7 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeMap {
 		alphabet = append(alphabet, string(i))
 	}
 
-	dbRanges := make(map[string][]DbRange, dbCount)
+	dbRanges := make(map[string][]string, dbCount)
 
 	initialRangeCount := float64(len(alphabet))
 
@@ -82,21 +74,7 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeMap {
 	for i, _ := range dbRanges {
 
 		start := alphabet[counter*rangeCountPerDB]
-
-		//if the last range is longer than the number of elements in our alphabet, then we set the length of the alphabet as the maximum upper bound (this will only ever apply to the last database
-		var end string
-		if (counter+1)*rangeCountPerDB > len(alphabet)+1 {
-			end = alphabet[len(alphabet)+1]
-			continue
-		}
-		end = alphabet[(counter+1)*rangeCountPerDB]
-
-		dbRanges[i] = []DbRange{
-			{
-				start: start,
-				end:   end,
-			},
-		}
+		dbRanges[i] = append(dbRanges[i], start)
 	}
 
 	return dbRanges
@@ -105,18 +83,18 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeMap {
 
 // ExecuteStartUpMapping executes the mapping for when the service is first started.
 // It will assign the database instances the given ranges by writing them into the dbMappingsTable
-func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRangeMap) {
+func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRangeStartMap) {
 
 	var err error
 
 	//TODO maybe do this in one query
 
 	for url, dbRanges := range rangeMap {
-		for _, dbRange := range dbRanges {
+		for _, dbRangeStart := range dbRanges {
 
-			err = s.writerPerf.AddDatabaseMapping(dbRange.start, dbRange.end, url, ctx)
+			err = s.writerPerf.AddDatabaseMapping(dbRangeStart, url, ctx)
 			if err != nil {
-				s.logger.Warn("Could not write mapping to database", zap.String("url", url), zap.String("start", dbRange.start), zap.String("end", dbRange.end))
+				s.logger.Warn("Could not write mapping to database", zap.String("url", url), zap.String("start", dbRangeStart))
 			}
 		}
 	}
