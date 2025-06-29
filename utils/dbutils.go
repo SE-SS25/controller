@@ -27,9 +27,3 @@ func SetupDBConn(logger *zap.Logger, ctx context.Context) (*pgxpool.Pool, error)
 
 	return pool, nil
 }
-
-func AcquireLock(ctx context.Context, pool *pgxpool.Pool) (*pgxpool.Conn, error) {
-
-	conn, err := pool.Acquire(ctx)
-	return conn, err
-}

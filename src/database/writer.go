@@ -19,29 +19,38 @@ type Writer struct {
 
 func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 
-	conn, err := w.Pool.Acquire(ctx)
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("acquiring lock failed: %w", err)
+		return fmt.Errorf("beginning transaction: %w", err)
 	}
 
-	q := database.New(conn)
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
 	err = q.DeleteWorker(ctx, uuid)
 	if err != nil {
 		return fmt.Errorf("removing worker failed: %w", err)
 	}
 
-	return nil
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
 
+	w.Logger.Debug("successfully removed worker", zap.String("worker_uuid", uuid.String()))
+	return nil
 }
 
 func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error {
 
-	conn, err := w.Pool.Acquire(ctx)
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("acquiring lock failed: %w", err)
+		return fmt.Errorf("beginning transaction failed: %w", err)
 	}
 
-	q := database.New(conn)
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
 	params := database.CreateMappingParams{
 		ID: pgtype.UUID{
 			Bytes: uuid.New(),
@@ -55,18 +64,26 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 		return fmt.Errorf("adding database mapping failed: %w", err)
 	}
 
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	w.Logger.Debug("successfully added database mapping", zap.String("from", from), zap.String("url", url))
 	return nil
 }
 
 // AddMigrationJob takes one range with a given id from the mapping table and transfers it into to migrations-table, marking it to be migrated by the migration worker specified through the id
 func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string) error {
 
-	conn, err := w.Pool.Acquire(ctx)
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("acquiring lock failed %w", err)
+		return fmt.Errorf("beginning transaction failed: %w", err)
 	}
 
-	q := database.New(conn)
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
 	params := database.CreateMigrationJobParams{
 		ID: pgtype.UUID{
 			Bytes: [16]byte([]byte(rangeId)),
@@ -79,19 +96,28 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 	}
 	err = q.CreateMigrationJob(ctx, params)
 	if err != nil {
-		return fmt.Errorf("adding migration job to database failed %w", err)
+		return fmt.Errorf("adding migration job to database failed: %w", err)
 	}
 
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	w.Logger.Debug("successfully added migration job", zap.String("range_id", rangeId), zap.String("worker_id", mWorkerId))
 	return nil
 }
 
 func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamp) error {
-	conn, err := w.Pool.Acquire(ctx)
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("acquiring lock failed %w", err)
+		return fmt.Errorf("beginning transaction failed: %w", err)
 	}
 
-	q := database.New(conn)
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
 	params := database.DeleteDBConnErrorParams{
 		DbUrl:    dbUrl,
 		WorkerID: workerId,
@@ -100,41 +126,37 @@ func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, work
 
 	deletionErr := q.DeleteDBConnError(ctx, params)
 	if deletionErr != nil {
-		return fmt.Errorf("removing outdated dbConnErr from database failed %w", err)
+		return fmt.Errorf("removing outdated dbConnErr from database failed: %w", deletionErr)
 	}
 
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	w.Logger.Debug("successfully deleted db connection errors", zap.String("db_url", dbUrl.String), zap.String("worker_id", workerId.String()), zap.Time("fail_time", failTime.Time))
 	return nil
 }
 
 func (w *Writer) Heartbeat(ctx context.Context) error {
 
-	conn, err := w.Pool.Acquire(ctx)
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("acquiring lock failed %w", err)
+		return fmt.Errorf("beginning transaction failed: %w", err)
 	}
 
-	tx, txErr := conn.BeginTx(ctx, pgx.TxOptions{})
-	if txErr != nil {
-		return fmt.Errorf("creating transaction failed %w", txErr)
-	}
-
-	defer func(tx pgx.Tx, ctx context.Context) {
-		rollBackErr := tx.Rollback(ctx)
-		if rollBackErr != nil {
-			w.Logger.Warn("error occurred rolling back transaction for controller heartbeat", zap.Error(rollBackErr))
-		}
-	}(tx, ctx)
+	defer tx.Rollback(ctx)
 
 	q := database.New(tx)
 
 	state, queryErr := q.GetControllerState(ctx)
 	if queryErr != nil {
-		return fmt.Errorf("getting old controller state failed %w", queryErr)
+		return fmt.Errorf("getting old controller state failed: %w", queryErr)
 	}
 
 	delErr := q.DeleteOldControllerHeartbeat(ctx)
 	if delErr != nil {
-		return fmt.Errorf("deleting old controller state failed %w", delErr)
+		return fmt.Errorf("deleting old controller state failed: %w", delErr)
 	}
 
 	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
@@ -149,13 +171,14 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
 	if creationErr != nil {
-		return fmt.Errorf("creating new heartbeat failed %w", creationErr)
+		return fmt.Errorf("creating new heartbeat failed: %w", creationErr)
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed %w", commitErr)
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
 	}
 
+	w.Logger.Debug("successfully updated controller heartbeat", zap.Bool("scaling", state.Scaling), zap.Time("last_heartbeat", params.LastHeartbeat.Time))
 	return nil
 }
