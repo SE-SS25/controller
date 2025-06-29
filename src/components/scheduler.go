@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 	"math"
 )
@@ -108,9 +109,22 @@ func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
 
 	//TODO creating a new migration worker everytime we have a migration is inefficient, we should check if they still exist and if they do give them a few seconds to start processing the migration
 	//BUT how can we check if the migration is in processing -> maybe processing status
+	var migrationWorkerId string
+	newWorker := true
 
-	//Create an id for the migration worker we are about to create
-	migrationWorkerId := uuid.New().String()
+	workerId, err := s.readerPerf.GetFreeMigrationWorker(ctx)
+
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		//if there is no available migration worker, create a new one
+		migrationWorkerId = uuid.New().String()
+	case err == nil:
+		migrationWorkerId = workerId.String()
+		newWorker = false
+	default:
+		s.logger.Error("could not get migration worker from database", zap.Error(err))
+		return fmt.Errorf("could not get migration worker from database, but error was NOT sql.NoRows: %w", err)
+	}
 
 	//copy the given rangeID from the mappings-table to the migrations-table and specify the worker that is responsible
 	jobErr := s.writerPerf.AddMigrationJob(ctx, rangeId, migrationWorkerId)
@@ -121,11 +135,12 @@ func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
 	}
 
 	//create a worker and assign it an id, then assign the job to it (create uuid in beginning and use it for both)
-
-	spawnErr := s.dockerInterface.StartMigrationWorker(ctx)
-	if spawnErr != nil {
-		errW := fmt.Errorf("spawning migration worker failed: %w", spawnErr)
-		s.logger.Error("could not migrate db-range", zap.Error(errW))
+	if !newWorker {
+		spawnErr := s.dockerInterface.StartMigrationWorker(ctx)
+		if spawnErr != nil {
+			errW := fmt.Errorf("spawning migration worker failed: %w", spawnErr)
+			s.logger.Error("could not migrate db-range", zap.Error(errW))
+		}
 	}
 
 	return nil

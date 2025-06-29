@@ -173,3 +173,26 @@ func (r *Reader) GetDBConnErrors(ctx context.Context) ([]database.DbConnErr, err
 	r.Logger.Debug("successfully got db conn errors")
 	return connectionErrors, nil
 }
+
+func (r *Reader) GetFreeMigrationWorker(ctx context.Context) (pgtype.UUID, error) {
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("beginning transaction failed: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
+	workerUUID, queryErr := q.GetFreeMigrationWorker(ctx)
+	if queryErr != nil {
+		return pgtype.UUID{}, fmt.Errorf("getting available migration worker failed: %w", queryErr)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return pgtype.UUID{}, fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	r.Logger.Debug("successfully got available worker", zap.String("workerID", workerUUID.String()))
+	return workerUUID, nil
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	sqlc "controller/src/database/sqlc"
 	"controller/utils"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"time"
 )
@@ -171,4 +172,24 @@ func (r *ReaderPerfectionist) GetDBConnErrors(ctx context.Context) ([]sqlc.DbCon
 
 	r.reader.Logger.Error("getting db connection errors failed, retry limit reached", zap.Error(err))
 	return nil, err
+}
+
+func (r *ReaderPerfectionist) GetFreeMigrationWorker(ctx context.Context) (pgtype.UUID, error) {
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		workerUUID, err := r.reader.GetFreeMigrationWorker(ctx)
+		if err == nil {
+			return workerUUID, nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("getting available migration worker failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
+		}
+	}
+
+	r.reader.Logger.Error("getting available migration worker failed, retry limit reached", zap.Error(err))
+	return pgtype.UUID{}, err
 }

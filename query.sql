@@ -19,6 +19,12 @@ SELECT COUNT(id) FROM worker_metric;
 -- name: GetAllDbConnErrors :many
 SELECT * FROM db_conn_err;
 
+-- name: GetFreeMigrationWorker :one
+(SELECT id FROM migration_worker
+EXCEPT
+SELECT m_worker_id FROM db_migration)
+LIMIT 1;
+
 
 
 
@@ -44,3 +50,4 @@ DELETE FROM controller_status;
 -- name: CreateNewControllerHeartbeat :exec
 INSERT INTO controller_status(scaling, last_heartbeat)
 VALUES ($1, $2);
+
