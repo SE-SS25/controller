@@ -5,9 +5,11 @@ import (
 	database "controller/src/database/sqlc"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+	"time"
 )
 
 type Writer struct {
@@ -99,6 +101,60 @@ func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, work
 	deletionErr := q.DeleteDBConnError(ctx, params)
 	if deletionErr != nil {
 		return fmt.Errorf("removing outdated dbConnErr from database failed %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) Heartbeat(ctx context.Context) error {
+
+	conn, err := w.Pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("heartbeating to database failed %w", err)
+	}
+
+	tx, txErr := conn.BeginTx(ctx, pgx.TxOptions{})
+	if txErr != nil {
+		return fmt.Errorf("heartbeating to database failed %w", txErr)
+	}
+
+	defer func(tx pgx.Tx, ctx context.Context) {
+		rollBackErr := tx.Rollback(ctx)
+		if rollBackErr != nil {
+			w.Logger.Warn("error occurred rolling back transaction for controller heartbeat", zap.Error(rollBackErr))
+		}
+	}(tx, ctx)
+
+	q := database.New(tx)
+
+	state, queryErr := q.GetControllerState(ctx)
+	if queryErr != nil {
+		return fmt.Errorf("heartbeating to database failed %w", queryErr)
+	}
+
+	delErr := q.DeleteOldControllerHeartbeat(ctx)
+	if delErr != nil {
+		return fmt.Errorf("heartbeating to database failed %w", delErr)
+	}
+
+	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
+	params := database.CreateNewControllerHeartbeatParams{
+		Scaling: state.Scaling,
+		LastHeartbeat: pgtype.Timestamp{
+			Time:             time.Now(),
+			InfinityModifier: 0,
+			Valid:            true,
+		},
+	}
+
+	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
+	if creationErr != nil {
+		return fmt.Errorf("heartbeating to database failed %w", creationErr)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("heartbeating to database failed %w", commitErr)
 	}
 
 	return nil

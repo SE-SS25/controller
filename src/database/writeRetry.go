@@ -131,3 +131,25 @@ func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgty
 	return err
 
 }
+
+func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
+
+	var err error
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.Heartbeat(ctx)
+		if err == nil {
+			return nil
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("heartbeat failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("heartbeat failed, retry limit reached", zap.Error(err))
+
+	return err
+}

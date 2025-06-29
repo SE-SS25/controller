@@ -97,6 +97,7 @@ func main() {
 		fmt.Printf("Logger creation failed, since an invalid app environment was specified: %s", env)
 		return
 	}
+	logger.Info("Logger initialized", zap.String("environment", env))
 
 	defer func(logger *zap.Logger) {
 		err := logger.Sync()
@@ -120,17 +121,18 @@ func main() {
 		}
 	}
 
-	logger.Info("Logger initialized", zap.String("environment", env))
-
 	scheduler, reconciler, controller := setupStructs(pool, logger)
-
-	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
 
 	iterationTimeout := utils.ParseEnvDuration("ITER_TIMEOUT", time.Second, logger)
 
 	go func() {
 		controller.RunHttpServer()
 	}()
+	go func() {
+		reconciler.Heartbeat()
+	}
+
+	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
 
 	//If this controller is the shadow, it should get stuck in this loop
 	for controller.isShadow {

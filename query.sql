@@ -37,3 +37,10 @@ WHERE db_mapping.id=$1;
 -- name: DeleteDBConnError :exec
 DELETE FROM db_conn_err
 WHERE db_url = $1 AND worker_id = $2 AND fail_time = $3;
+
+-- name: DeleteOldControllerHeartbeat :exec
+DELETE FROM controller_status;
+
+-- name: CreateNewControllerHeartbeat :exec
+INSERT INTO controller_status(scaling, last_heartbeat)
+VALUES ($1, $2);
