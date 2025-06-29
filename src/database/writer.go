@@ -21,7 +21,7 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("removing worker failed: %w", err)
+		return fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	q := database.New(conn)
@@ -38,7 +38,7 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("adding database mapping failed: %w", err)
+		return fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	q := database.New(conn)
@@ -63,7 +63,7 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("adding migration job to database failed %w", err)
+		return fmt.Errorf("acquiring lock failed %w", err)
 	}
 
 	q := database.New(conn)
@@ -88,7 +88,7 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamp) error {
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("removing outdated dbConnErr from database failed %w", err)
+		return fmt.Errorf("acquiring lock failed %w", err)
 	}
 
 	q := database.New(conn)
@@ -110,12 +110,12 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	conn, err := w.Pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("heartbeating to database failed %w", err)
+		return fmt.Errorf("acquiring lock failed %w", err)
 	}
 
 	tx, txErr := conn.BeginTx(ctx, pgx.TxOptions{})
 	if txErr != nil {
-		return fmt.Errorf("heartbeating to database failed %w", txErr)
+		return fmt.Errorf("creating transaction failed %w", txErr)
 	}
 
 	defer func(tx pgx.Tx, ctx context.Context) {
@@ -129,12 +129,12 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	state, queryErr := q.GetControllerState(ctx)
 	if queryErr != nil {
-		return fmt.Errorf("heartbeating to database failed %w", queryErr)
+		return fmt.Errorf("getting old controller state failed %w", queryErr)
 	}
 
 	delErr := q.DeleteOldControllerHeartbeat(ctx)
 	if delErr != nil {
-		return fmt.Errorf("heartbeating to database failed %w", delErr)
+		return fmt.Errorf("deleting old controller state failed %w", delErr)
 	}
 
 	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
@@ -149,12 +149,12 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
 	if creationErr != nil {
-		return fmt.Errorf("heartbeating to database failed %w", creationErr)
+		return fmt.Errorf("creating new heartbeat failed %w", creationErr)
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("heartbeating to database failed %w", commitErr)
+		return fmt.Errorf("committing transaction failed %w", commitErr)
 	}
 
 	return nil

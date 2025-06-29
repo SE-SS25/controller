@@ -31,7 +31,7 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric
 
 	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
-		return nil, fmt.Errorf("getting worker state failed: %w", err)
+		return nil, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -39,7 +39,7 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric
 	q := database.New(conn)
 	workers, err := q.GetAllWorkerState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("getting worker state failed: %w", err)
+		return nil, fmt.Errorf("getting all worker states failed: %w", err)
 	}
 
 	r.Logger.Debug("successfully got workers state")
@@ -50,7 +50,7 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (dat
 
 	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
-		return database.WorkerMetric{}, fmt.Errorf("getting worker state failed: %w", err)
+		return database.WorkerMetric{}, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -61,7 +61,7 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (dat
 		Valid: true,
 	})
 	if err != nil {
-		return database.WorkerMetric{}, fmt.Errorf("getting worker state failed: %w", err)
+		return database.WorkerMetric{}, fmt.Errorf("getting single worker state failed: %w", err)
 	}
 
 	r.Logger.Debug("successfully got workers state")
@@ -72,7 +72,7 @@ func (r *Reader) GetControllerState(ctx context.Context) (database.ControllerSta
 
 	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
-		return database.ControllerStatus{}, fmt.Errorf("getting controller state failed: %w", err)
+		return database.ControllerStatus{}, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -91,7 +91,7 @@ func (r *Reader) GetControllerState(ctx context.Context) (database.ControllerSta
 func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 	conn, err := r.Pool.Acquire(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("getting worker count failed: %w", err)
+		return 0, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -110,7 +110,7 @@ func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 	conn, err := r.Pool.Acquire(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("getting db count failed: %w", err)
+		return 0, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()
@@ -128,7 +128,7 @@ func (r *Reader) GetDBConnErrors(ctx context.Context) ([]database.DbConnErr, err
 
 	conn, err := r.Pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("getting db_conn_errors failed: %w", err)
+		return nil, fmt.Errorf("acquiring lock failed: %w", err)
 	}
 
 	defer conn.Release()

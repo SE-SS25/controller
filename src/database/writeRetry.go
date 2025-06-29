@@ -58,13 +58,13 @@ func (w *WriterPerfectionist) RemoveWorker(uuid pgtype.UUID, ctx context.Context
 		}
 
 		if i < w.maxRetries {
-			w.writer.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+			w.writer.Logger.Warn("removing worker failed; retrying...", zap.Int("try", i), zap.Error(err))
 
 			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
 		}
 	}
 
-	w.writer.Logger.Error("getting workers state failed, retry limit reached", zap.Error(err))
+	w.writer.Logger.Error("removing worker failed, retry limit reached", zap.Error(err))
 	return err
 
 }
@@ -79,13 +79,13 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 		}
 
 		if i < w.maxRetries {
-			w.writer.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+			w.writer.Logger.Warn("adding database mapping failed; retrying...", zap.Int("try", i), zap.Error(err))
 
 			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
 		}
 	}
 
-	w.writer.Logger.Error("getting workers state failed, retry limit reached", zap.Error(err))
+	w.writer.Logger.Error("adding database mapping failed, retry limit reached", zap.Error(err))
 	return err
 }
 

@@ -64,7 +64,7 @@ func (r *ReaderPerfectionist) Ping(ctx context.Context) error {
 		}
 	}
 
-	r.reader.Logger.Error("getting controller state failed, retry limit reached", zap.Error(err))
+	r.reader.Logger.Error("pinging database failed, retry limit reached", zap.Error(err))
 	return err
 
 }
@@ -102,13 +102,13 @@ func (r *ReaderPerfectionist) GetAllWorkerState(ctx context.Context) ([]sqlc.Wor
 		}
 
 		if i < r.maxRetries {
-			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+			r.reader.Logger.Warn("getting all worker states failed; retrying...", zap.Int("try", i), zap.Error(err))
 
 			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
-	r.reader.Logger.Error("getting workers state failed, retry limit reached", zap.Error(err))
+	r.reader.Logger.Error("getting all worker states failed, retry limit reached", zap.Error(err))
 	return nil, err
 }
 
@@ -123,13 +123,13 @@ func (r *ReaderPerfectionist) GetSingleWorkerState(ctx context.Context, workerID
 		}
 
 		if i < r.maxRetries {
-			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+			r.reader.Logger.Warn("getting single worker state failed; retrying...", zap.Int("try", i), zap.Error(err))
 
 			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
-	r.reader.Logger.Error("getting worker state failed, retry limit reached", zap.String("workerID", workerID), zap.Error(err))
+	r.reader.Logger.Error("getting single worker state failed, retry limit reached", zap.String("workerID", workerID), zap.Error(err))
 	return sqlc.WorkerMetric{}, err
 }
 
@@ -143,13 +143,13 @@ func (r *ReaderPerfectionist) GetDBCount(ctx context.Context) (int, error) {
 		}
 
 		if i < r.maxRetries {
-			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+			r.reader.Logger.Warn("getting db count failed; retrying...", zap.Int("try", i), zap.Error(err))
 
 			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
-	r.reader.Logger.Error("getting workers state failed, retry limit reached", zap.Error(err))
+	r.reader.Logger.Error("getting db count failed, retry limit reached", zap.Error(err))
 	return 0, err
 }
 
