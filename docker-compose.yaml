@@ -1,0 +1,69 @@
+services:
+  controller:
+    container_name: matrix-controller
+    build:
+      context: .
+      dockerfile: docker/dev/Dockerfile #Change app environment here
+    env_file:
+      - env/.env
+    environment:
+      SHADOW: "false"
+    ports:
+      - "1234:1234"
+    depends_on:
+      postgres:
+        condition: service_started
+    networks:
+      - matrix-kingdom
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1234/health"]
+      interval: 5s
+      retries: 1
+      timeout: 30s
+
+  controller-shadow:
+    container_name: matrix-controller-shadow
+    build:
+      context: .
+      dockerfile: docker/dev/Dockerfile #Change app environment here
+    env_file:
+      - env/.env
+    environment:
+      SHADOW: "true"
+    ports:
+      - "1235:1235"
+    networks:
+      - matrix-kingdom
+    depends_on:
+      controller:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:1234/health" ]
+      interval: 5s
+      retries: 1
+      timeout: 30s
+
+
+  postgres:
+    image: postgres
+    command: -c 'max_connections=1000'
+    container_name: matrix-pg
+    restart: unless-stopped
+    env_file:
+      - env/.env.database
+    volumes:
+      - matrix-pg_db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - matrix-kingdom
+    healthcheck:
+      test: [ "CMD-SHELL", "sh -c 'pg_isready -U username -d db'" ]
+
+
+networks:
+  matrix-kingdom:
+    name: matrix-kingdom
+
+volumes:
+  matrix-pg_db:
