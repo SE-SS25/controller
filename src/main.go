@@ -123,19 +123,38 @@ func main() {
 
 	scheduler, reconciler, controller := setupStructs(pool, logger)
 
-	iterationTimeout := utils.ParseEnvDuration("ITER_TIMEOUT", time.Second, logger)
-
+	//Run the http error
 	go func() {
 		controller.RunHttpServer()
 	}()
+
+	//Make the controller heartbeat to the database
 	go func() {
-		reconciler.Heartbeat()
-	}
+		heartbeatInterval := utils.ParseEnvDuration("HEARTBEAT_BACKOFF", 5*time.Second, logger)
+
+		start := time.Now()
+
+		heartbeatErr := reconciler.Heartbeat(ctx)
+		if heartbeatErr != nil {
+			controller.logger.Error("heartbeat failed", zap.Error(heartbeatErr))
+		}
+
+		end := time.Now()
+
+		timeToSleep := heartbeatInterval - (end.Sub(start))
+
+		time.Sleep(timeToSleep)
+	}()
 
 	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
 
 	//If this controller is the shadow, it should get stuck in this loop
 	for controller.isShadow {
+
+		checkInterval := utils.ParseEnvDuration("CHECK_CONTROLLER_BACKOFF", 3*time.Second, logger)
+
+		start := time.Now()
+
 		shadowErr := reconciler.CheckControllerUp(ctx)
 
 		if !errors.Is(shadowErr, &customErr.ControllerCrashed{}) {
@@ -146,18 +165,36 @@ func main() {
 			}
 			controller.isShadow = false //Put the shadow in control
 		}
+
+		end := time.Now()
+
+		timeToSleep := checkInterval - (end.Sub(start))
+
+		time.Sleep(timeToSleep)
 	}
 
-	timeout := utils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
+	timeout := utils.ParseEnvDuration("WORKER_HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 
 	// Function to evaluate worker state
 	go func() {
+
+		checkInterval := utils.ParseEnvDuration("CHECK_WORKER_BACKOFF", 3*time.Second, logger)
+
+		start := time.Now()
+
 		err := reconciler.EvaluateWorkerState(ctx, timeout)
 		if err != nil {
 			//Since there is no writing happening, we can kill the controller here so the shadow can step in
 			logger.Fatal("fatal error evaluating worker state", zap.Error(err))
 		}
-		time.Sleep(iterationTimeout)
+
+		end := time.Now()
+
+		//calculate the time it took for the last check to be concluded and then subtract that from the interval and sleep for the resulting amount of time -> this way the interval should always be the same length
+		timeToSleep := checkInterval - (end.Sub(start))
+
+		time.Sleep(timeToSleep)
+
 	}()
 
 	//Function to evaluate failure rate in mongo-worker relationships

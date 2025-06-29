@@ -39,30 +39,21 @@ func (r *Reconciler) PingDB(ctx context.Context) error {
 
 	return nil
 }
-func (r *Reconciler) Heartbeat(ctx context.Context) {
-
-	heartbeatInterval := utils.ParseEnvDuration("HEARTBEAT_BACKOFF", 5*time.Second, r.logger)
-
-	start := time.Now()
+func (r *Reconciler) Heartbeat(ctx context.Context) error {
 
 	//We don't make the controller terminate here since its trying to ping the database every second anyway, and if that fails it will shut off
 	heartbeatErr := r.writerPerf.Heartbeat(ctx)
 	if heartbeatErr != nil {
-		r.logger.Error("heartbeat failed", zap.Error(heartbeatErr))
+		return heartbeatErr
 	}
 
-	end := time.Now()
-
-	//calculate the time it took for the last heartbeat to be written to the database and then subtract that from the interval and sleep for the resulting amount of time -> this way the interval should always be the same length
-	timeToSleep := heartbeatInterval - (end.Sub(start))
-
-	time.Sleep(timeToSleep)
+	return nil
 }
 
 // CheckControllerUp checks if the controller has a valid heartbeat and if not, activates the shadow as the new controller
 func (r *Reconciler) CheckControllerUp(ctx context.Context) error {
 
-	timeout := utils.ParseEnvDuration("CHECK_ITER_TIMEOUT", time.Second, r.logger)
+	timeout := utils.ParseEnvDuration("CONTROLLER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
 
 	state, err := r.readerPerf.GetControllerState(ctx)
 	if err != nil {
