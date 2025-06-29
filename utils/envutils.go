@@ -1,4 +1,4 @@
-package envutils
+package utils
 
 import (
 	"go.uber.org/zap"
@@ -22,11 +22,11 @@ func ParseEnvDuration(env string, durationDefault time.Duration, logger *zap.Log
 
 func ParseEnvInt(env string, intDefault int, logger *zap.Logger) int {
 
-	retriesString := os.Getenv(env)
+	intString := os.Getenv(env)
 
-	logger.Debug("got env variable", zap.String("variable", env), zap.String("value", retriesString))
+	logger.Debug("got env variable", zap.String("variable", env), zap.String("value", intString))
 
-	retries, err := strconv.Atoi(retriesString)
+	retries, err := strconv.Atoi(intString)
 	if err != nil {
 		logger.Warn("Could not parse from .env, setting default", zap.String("variable", env), zap.Int("default", intDefault), zap.Error(err))
 		return intDefault
@@ -34,6 +34,20 @@ func ParseEnvInt(env string, intDefault int, logger *zap.Logger) int {
 
 	return retries
 }
+
+func ParseEnvStringWithDefault(env string, defaultValue string, logger *zap.Logger) string {
+	envString := os.Getenv(env)
+
+	logger.Debug("got env variable", zap.String("variable", env), zap.String("value", envString))
+
+	if envString == "" {
+		return defaultValue
+	}
+
+	return envString
+
+}
+
 func SetShadowPort(portString string) (string, error) {
 	portInt, err := strconv.Atoi(portString)
 	if err != nil {

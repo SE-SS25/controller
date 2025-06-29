@@ -3,7 +3,7 @@ package database
 import (
 	"context"
 	database "controller/src/database/sqlc"
-	"controller/src/dbutils"
+	"controller/utils"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,7 +29,7 @@ func (r *Reader) Ping(ctx context.Context) error {
 
 func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric, error) {
 
-	conn, err := dbutils.AcquireLock(ctx, r.Pool)
+	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("getting worker state failed: %w", err)
 	}
@@ -48,7 +48,7 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric
 
 func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (database.WorkerMetric, error) {
 
-	conn, err := dbutils.AcquireLock(ctx, r.Pool)
+	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
 		return database.WorkerMetric{}, fmt.Errorf("getting worker state failed: %w", err)
 	}
@@ -70,7 +70,7 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (dat
 
 func (r *Reader) GetControllerState(ctx context.Context) (database.ControllerStatus, error) {
 
-	conn, err := dbutils.AcquireLock(ctx, r.Pool)
+	conn, err := utils.AcquireLock(ctx, r.Pool)
 	if err != nil {
 		return database.ControllerStatus{}, fmt.Errorf("getting controller state failed: %w", err)
 	}

@@ -3,18 +3,47 @@ package database
 import (
 	"context"
 	sqlc "controller/src/database/sqlc"
+	"controller/utils"
 	"go.uber.org/zap"
+	"time"
 )
 
 type ReaderPerfectionist struct {
-	reader     Reader
-	maxRetries int
+	reader         *Reader
+	maxRetries     int
+	initialBackoff time.Duration
+	backoffType    string
 }
 
-func NewReaderPerfectionist(reader Reader, maxRetries int) *ReaderPerfectionist {
+func NewReaderPerfectionist(reader *Reader, maxRetries int) *ReaderPerfectionist {
+
+	//TODO ugly with the loggers
+
+	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
+	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
+	initBackoff := utils.ParseEnvDuration("INIT_RETRY_BACKOFF", 15*time.Millisecond, reader.Logger)
+
+	defaultBackoffStrategy := "exp"
+
+	backoffTypeInput := utils.ParseEnvStringWithDefault("BACKOFF_TYPE", defaultBackoffStrategy, reader.Logger)
+
+	var backoffType string
+
+	switch backoffTypeInput {
+	case "exp":
+		backoffType = "exponential"
+	case "lin":
+		backoffType = "linear"
+	default:
+		reader.Logger.Warn("invalid backoff strategy provided, setting default", zap.String("provided", backoffTypeInput))
+		backoffType = defaultBackoffStrategy
+	}
+
 	return &ReaderPerfectionist{
-		reader:     reader,
-		maxRetries: maxRetries,
+		reader:         reader,
+		maxRetries:     maxRetries,
+		initialBackoff: initBackoff,
+		backoffType:    backoffType,
 	}
 }
 
@@ -30,6 +59,8 @@ func (r *ReaderPerfectionist) Ping(ctx context.Context) error {
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("pinging database failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
@@ -50,6 +81,8 @@ func (r *ReaderPerfectionist) GetControllerState(ctx context.Context) (sqlc.Cont
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("getting controller state failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
@@ -70,6 +103,8 @@ func (r *ReaderPerfectionist) GetAllWorkerState(ctx context.Context) ([]sqlc.Wor
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
@@ -89,6 +124,8 @@ func (r *ReaderPerfectionist) GetSingleWorkerState(ctx context.Context, workerID
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
@@ -107,6 +144,8 @@ func (r *ReaderPerfectionist) GetDBCount(ctx context.Context) (int, error) {
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("getting workers state failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 
@@ -125,6 +164,8 @@ func (r *ReaderPerfectionist) GetDBConnErrors(ctx context.Context) ([]sqlc.DbCon
 
 		if i < r.maxRetries {
 			r.reader.Logger.Warn("getting db connection errors failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
 		}
 	}
 

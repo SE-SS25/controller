@@ -4,8 +4,8 @@ import (
 	"context"
 	"controller/src/database"
 	sqlc "controller/src/database/sqlc"
-	"controller/src/envutils"
 	ownErrors "controller/src/errors"
+	"controller/utils"
 	"fmt"
 	"go.uber.org/zap"
 	"time"
@@ -19,10 +19,12 @@ type Reconciler struct {
 	writerPerf *database.WriterPerfectionist
 }
 
-func NewReconciler(logger *zap.Logger, readerPerf *database.ReaderPerfectionist, writerPerf *database.WriterPerfectionist) Reconciler {
+func NewReconciler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist) Reconciler {
 	return Reconciler{
 		logger:     logger,
+		reader:     dbReader,
 		readerPerf: readerPerf,
+		writer:     dbWriter,
 		writerPerf: writerPerf,
 	}
 }
@@ -41,7 +43,7 @@ func (r *Reconciler) PingDB(ctx context.Context) error {
 // CheckControllerUp checks if the controller has a valid heartbeat and if not, activates the shadow as the new controller
 func (r *Reconciler) CheckControllerUp(ctx context.Context) error {
 
-	timeout := envutils.ParseEnvDuration("CONTROLLER_CHECK_TIMEOUT", time.Second, r.logger)
+	timeout := utils.ParseEnvDuration("CHECK_ITER_TIMEOUT", time.Second, r.logger)
 
 	state, err := r.readerPerf.GetControllerState(ctx)
 	if err != nil {
@@ -79,7 +81,7 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 	var minimumUptime time.Duration
 
 	if !isScaling {
-		minimumUptime = envutils.ParseEnvDuration("MINIMUM_WORKER_UPTIME", 5*time.Second, r.logger)
+		minimumUptime = utils.ParseEnvDuration("MINIMUM_WORKER_UPTIME", 5*time.Second, r.logger)
 	}
 
 	workers, err := r.readerPerf.GetAllWorkerState(ctx)
@@ -144,7 +146,7 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 
 }
 
-// TODO run this every five minutes
+// CheckFailureRate queries all rows from the corresponding table in the database and runs some simple data aggregation to determine whether there is an unusually high failure rate in the last half hour (this goes for dbs, workers or db-worker-relationships)
 func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 	now := time.Now()
 

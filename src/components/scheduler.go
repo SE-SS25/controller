@@ -13,15 +13,19 @@ import (
 
 type Scheduler struct {
 	logger          *zap.Logger
+	reader          *database.Reader
 	readerPerf      *database.ReaderPerfectionist
+	writer          *database.Writer
 	writerPerf      *database.WriterPerfectionist
 	dockerInterface docker.DInterface
 }
 
-func NewScheduler(logger *zap.Logger, readerPerf *database.ReaderPerfectionist, writerPerf *database.WriterPerfectionist, dockerInterface docker.DInterface) Scheduler {
+func NewScheduler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist, dockerInterface docker.DInterface) Scheduler {
 	return Scheduler{
 		logger:          logger,
+		reader:          dbReader,
 		readerPerf:      readerPerf,
+		writer:          dbWriter,
 		writerPerf:      writerPerf,
 		dockerInterface: dockerInterface,
 	}

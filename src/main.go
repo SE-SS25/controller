@@ -5,10 +5,9 @@ import (
 	"controller/gomigrate"
 	"controller/src/components"
 	"controller/src/database"
-	"controller/src/dbutils"
 	"controller/src/docker"
-	"controller/src/envutils"
 	customErr "controller/src/errors"
+	"controller/utils"
 	"errors"
 	"fmt"
 	"github.com/goforj/godump"
@@ -106,7 +105,7 @@ func main() {
 		}
 	}(logger)
 
-	pool, err := dbutils.SetupDBConn(logger, ctx)
+	pool, err := utils.SetupDBConn(logger, ctx)
 	if err != nil {
 		logger.Fatal("establishing connection to database failed, controller is fucking useless, stopping...", zap.Error(err))
 		return
@@ -127,7 +126,7 @@ func main() {
 
 	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
 
-	iterationTimeout := envutils.ParseEnvDuration("ITER_TIMEOUT", time.Second, logger)
+	iterationTimeout := utils.ParseEnvDuration("ITER_TIMEOUT", time.Second, logger)
 
 	go func() {
 		controller.RunHttpServer()
@@ -147,7 +146,7 @@ func main() {
 		}
 	}
 
-	timeout := envutils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
+	timeout := utils.ParseEnvDuration("HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 
 	// Function to evaluate worker state
 	go func() {
@@ -190,15 +189,15 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 		Pool:   pool,
 	}
 
-	maxRetries := envutils.ParseEnvInt("MAX_RETRIES", 3, logger)
+	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, logger)
 
 	writerPerfectionist := database.NewWriterPerfectionist(
-		dbWriter,
+		&dbWriter,
 		maxRetries,
 	)
 
 	readerPerfectionist := database.NewReaderPerfectionist(
-		dbReader,
+		&dbReader,
 		maxRetries)
 
 	dockerInterface, err := docker.New(logger)
@@ -208,14 +207,18 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 
 	scheduler := components.NewScheduler(
 		logger.With(zap.String("component", "scheduler")),
+		&dbReader,
 		readerPerfectionist,
+		&dbWriter,
 		writerPerfectionist,
 		dockerInterface,
 	)
 
 	reconciler := components.NewReconciler(
 		logger.With(zap.String("component", "reconciler")),
+		&dbReader,
 		readerPerfectionist,
+		&dbWriter,
 		writerPerfectionist,
 	)
 
@@ -227,5 +230,3 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 
 	return scheduler, reconciler, gauntlet
 }
-
-re

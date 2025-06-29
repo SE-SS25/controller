@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"controller/src/components"
-	"controller/src/envutils"
+	"controller/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"net/http"
@@ -24,10 +24,10 @@ func (c *Controller) RunHttpServer() {
 	var port string
 	var err error
 
-	port = os.Getenv("BASE_PORT")
+	port = os.Getenv("BASE_HTTP_PORT")
 
 	if c.isShadow {
-		port, err = envutils.SetShadowPort(port)
+		port, err = utils.SetShadowPort(port)
 		if err != nil {
 			c.logger.Warn("could not set appropriate http server port for shadow", zap.Error(err))
 		}
