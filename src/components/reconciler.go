@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// Reconciler handles all tasks concerning the health of the overall system.
+// Meaning it checks for controller, worker, migration_worker, monitor health and reconciles when there is a failure
 type Reconciler struct {
 	logger     *zap.Logger
 	reader     *database.Reader

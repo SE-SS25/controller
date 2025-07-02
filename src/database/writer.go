@@ -81,7 +81,7 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 // AddMigrationJob takes a range with a given id from the mapping table and transfers it into the migrations table,
 // marking it to be migrated by the migration worker specified through the id. Executes within a transaction.
 // Returns an error if the operation fails.
-func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string) error {
+func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, url, mWorkerId string) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -96,6 +96,7 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 			Bytes: [16]byte([]byte(rangeId)),
 			Valid: true,
 		}, //id of the range
+		Url: url, //url of the db instance we want to migrate to
 		MWorkerID: pgtype.UUID{
 			Bytes: [16]byte([]byte(mWorkerId)),
 			Valid: true,

@@ -6,7 +6,7 @@ import (
 	"controller/src/components"
 	"controller/src/database"
 	"controller/src/docker"
-	utils "controller/src/utils"
+	"controller/src/utils"
 	"fmt"
 	"github.com/goforj/godump"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -123,7 +123,7 @@ func main() {
 		}
 	}
 
-	//Run the http error
+	//Run the http server
 	go func() {
 		controller.RunHttpServer()
 	}()

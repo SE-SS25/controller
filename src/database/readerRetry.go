@@ -193,3 +193,47 @@ func (r *ReaderPerfectionist) GetFreeMigrationWorker(ctx context.Context) (pgtyp
 	r.reader.Logger.Error("getting available migration worker failed, retry limit reached", zap.Error(err))
 	return pgtype.UUID{}, err
 }
+
+func (r *ReaderPerfectionist) GetAllDbInstanceInfo(ctx context.Context) ([]sqlc.DbInstance, error) {
+
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		dbInstances, err := r.reader.GetAllDbInstanceInfo(ctx)
+		if err == nil {
+			return dbInstances, nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("getting info on all db instances failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
+		}
+	}
+
+	r.reader.Logger.Error("getting info on all db instances failed, retry limit reached", zap.Error(err))
+	return nil, err
+
+}
+
+func (r *ReaderPerfectionist) GetAllDbMappingInfo(ctx context.Context) ([]sqlc.DbMapping, error) {
+
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		dbInstances, err := r.reader.GetAllDbMappingInfo(ctx)
+		if err == nil {
+			return dbInstances, nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("getting all db mappings failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
+		}
+	}
+
+	r.reader.Logger.Error("getting db mappings failed, retry limit reached", zap.Error(err))
+	return nil, err
+
+}

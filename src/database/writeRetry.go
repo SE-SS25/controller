@@ -89,12 +89,12 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 	return err
 }
 
-func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID string, migrationWorkerID string) error {
+func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID string, url, migrationWorkerID string) error {
 
 	var err error
 
 	for i := 1; i <= w.maxRetries; i++ {
-		err = w.writer.AddMigrationJob(ctx, rangeID, migrationWorkerID)
+		err = w.writer.AddMigrationJob(ctx, rangeID, url, migrationWorkerID)
 		if err == nil {
 			return nil
 		}
