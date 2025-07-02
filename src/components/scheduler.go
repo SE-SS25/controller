@@ -52,8 +52,8 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStart
 		return nil
 	}
 
-	if dbCount > 26 { //TODO???
-		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances are registered"))
+	if dbCount > 26 {
+		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances registered for startup: tf do you need more than 26 db instances for on startup"))
 		s.logger.Error("error when calculating startup mapping", zap.Error(errW))
 		return nil
 	}

@@ -6,9 +6,7 @@ import (
 	"controller/src/components"
 	"controller/src/database"
 	"controller/src/docker"
-	customErr "controller/src/errors"
-	"controller/utils"
-	"errors"
+	utils "controller/src/utils"
 	"fmt"
 	"github.com/goforj/godump"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -113,15 +111,17 @@ func main() {
 		//TODO retries
 	}
 
-	if env == "dev" {
-		err = gomigrate.Migrate()
-		if err != nil {
-			logger.Error("error occurred during migrations", zap.Error(err))
-			return
+	scheduler, reconciler, controller := setupStructs(pool, logger)
+
+	if controller.isShadow {
+		if env == "dev" {
+			err = gomigrate.Migrate()
+			if err != nil {
+				logger.Error("error occurred during migrations", zap.Error(err))
+				return
+			}
 		}
 	}
-
-	scheduler, reconciler, controller := setupStructs(pool, logger)
 
 	//Run the http error
 	go func() {
@@ -129,49 +129,22 @@ func main() {
 	}()
 
 	//Make the controller heartbeat to the database
-	go func() {
-		heartbeatInterval := utils.ParseEnvDuration("HEARTBEAT_BACKOFF", 5*time.Second, logger)
+	if !controller.isShadow {
 
-		start := time.Now()
-
-		heartbeatErr := reconciler.Heartbeat(ctx)
-		if heartbeatErr != nil {
-			controller.logger.Error("heartbeat failed", zap.Error(heartbeatErr))
+		if registerErr := reconciler.RegisterController(ctx); registerErr != nil {
+			logger.Fatal("could not register controller, stopping", zap.Error(registerErr))
 		}
 
-		end := time.Now()
+		go controller.heartbeat(ctx)
 
-		timeToSleep := heartbeatInterval - (end.Sub(start))
+		mapping := scheduler.CalculateStartupMapping(ctx)
 
-		time.Sleep(timeToSleep)
-	}()
+		scheduler.ExecuteStartUpMapping(ctx, mapping)
 
-	controller.isShadow = strings.ToLower(os.Getenv("SHADOW")) == "true"
-
-	//If this controller is the shadow, it should get stuck in this loop
-	for controller.isShadow {
-
-		checkInterval := utils.ParseEnvDuration("CHECK_CONTROLLER_BACKOFF", 3*time.Second, logger)
-
-		start := time.Now()
-
-		shadowErr := reconciler.CheckControllerUp(ctx)
-
-		if !errors.Is(shadowErr, &customErr.ControllerCrashed{}) {
-			logger.Fatal("shadow reconciliation loop failed", zap.Error(shadowErr))
-			setEnvErr := os.Setenv("SHADOW", "false")
-			if setEnvErr != nil {
-				logger.Warn("could not change `SHADOW` environment variable after taking over as controller")
-			}
-			controller.isShadow = false //Put the shadow in control
-		}
-
-		end := time.Now()
-
-		timeToSleep := checkInterval - (end.Sub(start))
-
-		time.Sleep(timeToSleep)
 	}
+
+	//If this controller is the shadow, it should get stuck in this function
+	controller.checkControllerUp(ctx)
 
 	timeout := utils.ParseEnvDuration("WORKER_HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 
@@ -206,12 +179,7 @@ func main() {
 		time.Sleep(5 * time.Minute)
 	}()
 
-	mapping := scheduler.CalculateStartupMapping(ctx)
-
-	scheduler.ExecuteStartUpMapping(ctx, mapping)
-
 	select {}
-	//TODO implement the startup -> wait for
 }
 
 // setupStructs sets up all structs needed for functionality in the worker.
@@ -265,6 +233,7 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 		scheduler:  scheduler,
 		reconciler: reconciler,
 		logger:     logger.With(zap.String("component", "httpHandler")),
+		isShadow:   strings.ToLower(os.Getenv("SHADOW")) == "true",
 	}
 
 	return scheduler, reconciler, gauntlet

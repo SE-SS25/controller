@@ -12,7 +12,7 @@ services:
       - "1234:1234"
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
     networks:
       - matrix-kingdom
     healthcheck:

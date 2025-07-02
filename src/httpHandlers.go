@@ -2,20 +2,12 @@ package main
 
 import (
 	"context"
-	"controller/src/components"
-	"controller/utils"
+	"controller/src/utils"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"net/http"
 	"os"
 )
-
-type Controller struct {
-	scheduler  components.Scheduler
-	reconciler components.Reconciler
-	logger     *zap.Logger
-	isShadow   bool
-}
 
 func (c *Controller) RunHttpServer() {
 	http.Handle("/migrate", c.migrationHandler())
@@ -40,6 +32,10 @@ func (c *Controller) RunHttpServer() {
 	c.logger.Info("Started http server", zap.String("port", port))
 }
 
+// migrationHandler returns an HTTP handler for triggering a database migration for a given range ID.
+// If the controller is in shadow mode, responds with HTTP 403 Forbidden.
+// Expects the rangeID as a query parameter. Generates a trace ID for the request context.
+// Responds with HTTP 204 No Content on success, or HTTP 500 Internal Server Error on failure.
 func (c *Controller) migrationHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -70,7 +66,8 @@ func (c *Controller) migrationHandler() http.HandlerFunc {
 	}
 }
 
-// health function checks the only thing this component really does, which is accessing the database
+// health returns an HTTP handler that checks the health of the controller by pinging the database.
+// Responds with HTTP 200 if the database is reachable, otherwise responds with HTTP 424 (Failed Dependency).
 func (c *Controller) health() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -85,6 +82,8 @@ func (c *Controller) health() http.HandlerFunc {
 	}
 }
 
+// generateCallTraceId generates a new UUID and attaches it to the context under the key "traceID".
+// Returns the new context with the trace ID included.
 func generateCallTraceId(ctx context.Context) context.Context {
 	traceUUID := uuid.New()
 

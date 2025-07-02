@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+	"time"
 )
 
 type Reader struct {
@@ -24,9 +25,13 @@ func (r *Reader) Ping(ctx context.Context) error {
 		return err
 	}
 
+	r.Logger.Debug("successfully pinged the database", zap.Time("timestamp", time.Now()))
+
 	return nil
 }
 
+// GetAllWorkerState retrieves the state of all workers from the database in a transaction.
+// Returns a slice of WorkerMetric and an error if the operation fails.
 func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -51,6 +56,8 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]database.WorkerMetric
 	return workers, nil
 }
 
+// GetSingleWorkerState retrieves the state of a single worker identified by workerID from the database in a transaction.
+// Returns the WorkerMetric of the worker and an error if the operation fails.
 func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (database.WorkerMetric, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -78,6 +85,8 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (dat
 	return worker, nil
 }
 
+// GetControllerState retrieves the current state of the controller from the database in a transaction.
+// Returns the ControllerStatus and an error if the operation fails.
 func (r *Reader) GetControllerState(ctx context.Context) (database.ControllerStatus, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -102,6 +111,8 @@ func (r *Reader) GetControllerState(ctx context.Context) (database.ControllerSta
 	return state, nil
 }
 
+// GetWorkerCount retrieves the total number of workers from the database in a transaction.
+// Returns the count as an int and an error if the operation fails.
 func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -126,6 +137,8 @@ func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 	return int(count), nil
 }
 
+// GetDBCount retrieves the total number of databases from the database in a transaction.
+// Returns the count as an int and an error if the operation fails.
 func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -150,6 +163,8 @@ func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 	return int(count), nil
 }
 
+// GetDBConnErrors retrieves all database connection error records from the database in a transaction.
+// Returns a slice of errors and logs the operation. Returns an error if the operation fails.
 func (r *Reader) GetDBConnErrors(ctx context.Context) ([]database.DbConnErr, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -174,6 +189,8 @@ func (r *Reader) GetDBConnErrors(ctx context.Context) ([]database.DbConnErr, err
 	return connectionErrors, nil
 }
 
+// GetFreeMigrationWorker fetches a UUID for a free migration worker from the database in a transaction.
+// Returns the worker UUID and an error if the operation fails.
 func (r *Reader) GetFreeMigrationWorker(ctx context.Context) (pgtype.UUID, error) {
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

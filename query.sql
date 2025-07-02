@@ -50,4 +50,3 @@ DELETE FROM controller_status;
 -- name: CreateNewControllerHeartbeat :exec
 INSERT INTO controller_status(scaling, last_heartbeat)
 VALUES ($1, $2);
-

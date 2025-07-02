@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	database "controller/src/database/sqlc"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,8 @@ type Writer struct {
 	Pool   *pgxpool.Pool
 }
 
+// RemoveWorker removes a worker from the database by UUID within a transaction.
+// Logs the operation and returns an error if the operation fails.
 func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -41,6 +44,8 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
 	return nil
 }
 
+// AddDatabaseMapping adds a new mapping for a range to a database URL in the mapping table.
+// Executes within a transaction and logs the result. Returns an error if the operation fails.
 func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -73,7 +78,9 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 	return nil
 }
 
-// AddMigrationJob takes one range with a given id from the mapping table and transfers it into to migrations-table, marking it to be migrated by the migration worker specified through the id
+// AddMigrationJob takes a range with a given id from the mapping table and transfers it into the migrations table,
+// marking it to be migrated by the migration worker specified through the id. Executes within a transaction.
+// Returns an error if the operation fails.
 func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -108,7 +115,9 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, mWorkerId string)
 	return nil
 }
 
-func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamp) error {
+// DeleteDbConnErrors deletes database connection error records for a given database URL, worker ID, and failure time.
+// Executes within a transaction and logs the result. Returns an error if the operation fails.
+func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamptz) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -138,7 +147,11 @@ func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, work
 	return nil
 }
 
+// Heartbeat updates the controller's heartbeat in the database, carrying over the scaling state.
+// Deletes the old heartbeat and creates a new one in a transaction. Returns an error if the operation fails.
 func (w *Writer) Heartbeat(ctx context.Context) error {
+
+	w.Logger.Debug("attempting to update heartbeat", zap.Time("timestamp", time.Now()))
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -162,7 +175,7 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
 	params := database.CreateNewControllerHeartbeatParams{
 		Scaling: state.Scaling,
-		LastHeartbeat: pgtype.Timestamp{
+		LastHeartbeat: pgtype.Timestamptz{
 			Time:             time.Now(),
 			InfinityModifier: 0,
 			Valid:            true,
@@ -181,4 +194,58 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	w.Logger.Debug("successfully updated controller heartbeat", zap.Bool("scaling", state.Scaling), zap.Time("last_heartbeat", params.LastHeartbeat.Time))
 	return nil
+}
+
+// RegisterController registers a new controller instance. Handles controller takeover or first-time registration,
+// updates the heartbeat, and logs the event. Returns an error if the operation fails.
+func (w *Writer) RegisterController(ctx context.Context) error {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("beginning transaction failed: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	q := database.New(tx)
+
+	state, queryErr := q.GetControllerState(ctx)
+	switch {
+	case queryErr == nil:
+		// Controller takeover: delete the old heartbeat
+		if delErr := q.DeleteOldControllerHeartbeat(ctx); delErr != nil {
+			return fmt.Errorf("deleting old controller state failed: %w", delErr)
+		}
+	case errors.Is(queryErr, pgx.ErrNoRows):
+		// No previous controller found
+		w.Logger.Debug("there has not been a controller before, starting the bloodline")
+		state.Scaling = false
+	case queryErr != nil:
+		// Unexpected error
+		return fmt.Errorf("getting controller state failed, but err was not 'no rows': %w", queryErr)
+	}
+
+	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
+	params := database.CreateNewControllerHeartbeatParams{
+		Scaling: state.Scaling,
+		LastHeartbeat: pgtype.Timestamptz{
+			Time:             time.Now(),
+			InfinityModifier: 0,
+			Valid:            true,
+		},
+	}
+
+	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
+	if creationErr != nil {
+		return fmt.Errorf("creating new heartbeat failed: %w", creationErr)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	w.Logger.Debug("successfully updated controller heartbeat for new controller", zap.Bool("scaling", state.Scaling), zap.Time("last_heartbeat", params.LastHeartbeat.Time))
+	return nil
+
 }

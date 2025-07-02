@@ -3,7 +3,7 @@ package database
 import (
 	"context"
 	sqlc "controller/src/database/sqlc"
-	"controller/utils"
+	"controller/src/utils"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"time"
