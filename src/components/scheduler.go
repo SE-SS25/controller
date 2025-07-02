@@ -3,6 +3,7 @@ package components
 import (
 	"context"
 	"controller/src/database"
+	sqlc "controller/src/database/sqlc"
 	"controller/src/docker"
 	"errors"
 	"fmt"
@@ -10,8 +11,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 	"math"
+	"time"
 )
 
+// Scheduler handles all tasks concerning scaling the system, like calculating ranges, running migrations and getting load of the system
 type Scheduler struct {
 	logger          *zap.Logger
 	reader          *database.Reader
@@ -19,6 +22,14 @@ type Scheduler struct {
 	writer          *database.Writer
 	writerPerf      *database.WriterPerfectionist
 	dockerInterface docker.DInterface
+}
+
+type MigrationInfo struct {
+	url             string
+	maxSpace        int64
+	collectionCount int64
+	lastQueried     time.Time
+	ranges          []sqlc.DbMapping
 }
 
 func NewScheduler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist, dockerInterface docker.DInterface) Scheduler {
@@ -52,8 +63,8 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStart
 		return nil
 	}
 
-	if dbCount > 26 { //TODO???
-		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances are registered"))
+	if dbCount > 26 {
+		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances registered for startup: tf do you need more than 26 db instances for on startup"))
 		s.logger.Error("error when calculating startup mapping", zap.Error(errW))
 		return nil
 	}
@@ -105,9 +116,9 @@ func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRan
 	}
 }
 
-func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
+// RunMigration creates a new migration job for the given rangeId. This range will be moved to the db with the provided url. For that a new migration worker will be created, or if there are available instances, one will be chosen
+func (s *Scheduler) RunMigration(ctx context.Context, rangeId, goalUrl string) error {
 
-	//TODO creating a new migration worker everytime we have a migration is inefficient, we should check if they still exist and if they do give them a few seconds to start processing the migration
 	//BUT how can we check if the migration is in processing -> maybe processing status
 	var migrationWorkerId string
 	newWorker := true
@@ -126,8 +137,8 @@ func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
 		return fmt.Errorf("could not get migration worker from database, but error was NOT sql.NoRows: %w", err)
 	}
 
-	//copy the given rangeID from the mappings-table to the migrations-table and specify the worker that is responsible
-	jobErr := s.writerPerf.AddMigrationJob(ctx, rangeId, migrationWorkerId)
+	//copy the rangeId and its "from" to the migrations table with the url of the goal db instance and a workerId chosen by the algorithm
+	jobErr := s.writerPerf.AddMigrationJob(ctx, rangeId, goalUrl, migrationWorkerId)
 	if jobErr != nil {
 		errW := fmt.Errorf("running migration failed: %w", jobErr)
 		s.logger.Error("could not migrate db-range", zap.Error(errW))
@@ -144,4 +155,52 @@ func (s *Scheduler) RunMigration(ctx context.Context, rangeId string) error {
 	}
 
 	return nil
+}
+
+func (s *Scheduler) GetSystemState(ctx context.Context) ([]MigrationInfo, error) {
+
+	dbInstances, instanceErr := s.readerPerf.GetAllDbInstanceInfo(ctx)
+	if instanceErr != nil {
+		return nil, instanceErr
+	}
+
+	mappings, mappingsErr := s.readerPerf.GetAllDbMappingInfo(ctx)
+	if mappingsErr != nil {
+		return nil, mappingsErr
+	}
+
+	infos := make([]MigrationInfo, 0)
+
+	var mappingMap map[string][]sqlc.DbMapping
+
+	//map mappings to mappings map
+	for _, mapping := range mappings {
+
+		if mappingMap[mapping.Url] == nil {
+			mappingMap[mapping.Url] = make([]sqlc.DbMapping, 0)
+		}
+		//ah yes... i love mapping
+		mappingMap[mapping.Url] = append(mappingMap[mapping.Url], mapping)
+	}
+
+	//Match dbInstances and according mappings
+	for _, instance := range dbInstances {
+
+		var info MigrationInfo
+
+		info.url = instance.Url
+		info.maxSpace = instance.MaxSpace
+		info.collectionCount = instance.CollectionCount.Int64
+		info.lastQueried = instance.LastQueried.Time
+
+		if mappingMap[info.url] == nil {
+			info.ranges = mappingMap[info.url]
+		}
+		//there are no ranges on a db instance (its empty)
+
+		infos = append(infos, info)
+	}
+
+	return infos, nil
+
 }

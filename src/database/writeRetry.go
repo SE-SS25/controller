@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	"controller/utils"
+	utils "controller/src/utils"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 	"time"
@@ -89,12 +89,12 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 	return err
 }
 
-func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID string, migrationWorkerID string) error {
+func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID string, url, migrationWorkerID string) error {
 
 	var err error
 
 	for i := 1; i <= w.maxRetries; i++ {
-		err = w.writer.AddMigrationJob(ctx, rangeID, migrationWorkerID)
+		err = w.writer.AddMigrationJob(ctx, rangeID, url, migrationWorkerID)
 		if err == nil {
 			return nil
 		}
@@ -110,7 +110,7 @@ func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID strin
 	return err
 }
 
-func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, timestamp pgtype.Timestamp) error {
+func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, timestamp pgtype.Timestamptz) error {
 
 	var err error
 
@@ -150,6 +150,28 @@ func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
 	}
 
 	w.writer.Logger.Error("heartbeat failed, retry limit reached", zap.Error(err))
+
+	return err
+}
+
+func (w *WriterPerfectionist) RegisterController(ctx context.Context) error {
+
+	var err error
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.RegisterController(ctx)
+		if err == nil {
+			return nil
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("registering controller failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("registering controller failed, retry limit reached", zap.Error(err))
 
 	return err
 }

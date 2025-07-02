@@ -5,12 +5,14 @@ import (
 	"controller/src/database"
 	sqlc "controller/src/database/sqlc"
 	ownErrors "controller/src/errors"
-	"controller/utils"
+	"controller/src/utils"
 	"fmt"
 	"go.uber.org/zap"
 	"time"
 )
 
+// Reconciler handles all tasks concerning the health of the overall system.
+// Meaning it checks for controller, worker, migration_worker, monitor health and reconciles when there is a failure
 type Reconciler struct {
 	logger     *zap.Logger
 	reader     *database.Reader
@@ -50,6 +52,16 @@ func (r *Reconciler) Heartbeat(ctx context.Context) error {
 	return nil
 }
 
+func (r *Reconciler) RegisterController(ctx context.Context) error {
+
+	if err := r.writerPerf.RegisterController(ctx); err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
 // CheckControllerUp checks if the controller has a valid heartbeat and if not, activates the shadow as the new controller
 func (r *Reconciler) CheckControllerUp(ctx context.Context) error {
 
@@ -63,13 +75,12 @@ func (r *Reconciler) CheckControllerUp(ctx context.Context) error {
 
 	timeSinceHeartbeat := time.Now().Sub(state.LastHeartbeat.Time)
 
+	r.logger.Debug("time since last heartbeat from controller", zap.Float64("seconds", timeSinceHeartbeat.Seconds()))
+
 	if timeSinceHeartbeat > timeout {
 		r.logger.Warn("Controller has surpassed heartbeat timeout, activating shadow", zap.Duration("timeout", timeout))
-		controllerErr := &ownErrors.ControllerCrashed{
-			Err: fmt.Errorf("controller has not heartbeat in valid timeframe, restarting, : %s", timeout),
-		}
 
-		return controllerErr
+		return ownErrors.ErrControllerCrashed
 	}
 
 	return nil
@@ -273,6 +284,8 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 	return nil
 }
 
+// workerHeartbeatOK checks if a worker's last heartbeat is valid and within the allowed timeout.
+// Returns an error if the heartbeat is invalid or delayed beyond the timeout, otherwise returns nil.
 func workerHeartbeatOK(worker sqlc.WorkerMetric, timeout time.Duration, logger *zap.Logger) error {
 	uuid := worker.ID
 
