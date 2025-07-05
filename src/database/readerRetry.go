@@ -16,13 +16,15 @@ type ReaderPerfectionist struct {
 	backoffType    string
 }
 
-func NewReaderPerfectionist(reader *Reader, maxRetries int) *ReaderPerfectionist {
+func NewReaderPerfectionist(reader *Reader) *ReaderPerfectionist {
 
 	//TODO ugly with the loggers
 
 	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
 	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
 	initBackoff := utils.ParseEnvDuration("INIT_RETRY_BACKOFF", 15*time.Millisecond, reader.Logger)
+
+	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, reader.Logger)
 
 	defaultBackoffStrategy := "exp"
 

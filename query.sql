@@ -50,14 +50,15 @@ INSERT INTO db_mapping(id, url, "from")
 VALUES ($1, $2, $3);
 
 -- name: CreateMigrationJob :exec
-INSERT INTO db_migration (id, url, m_worker_id, "from", status)
+INSERT INTO db_migration (id, url, m_worker_id, "from", "to", status)
 SELECT db_mapping.id,
-       $2, -- user input for 'url'
-       $3, -- user input for 'm_worker_id'
+       db_mapping.url,
+       $4, -- m_worker_id parameter
        db_mapping."from",
-       'waiting'  -- initial status
+       $3, -- "to" parameter (fixed comma)
+       'waiting'
 FROM db_mapping
-WHERE db_mapping.id = $1;
+WHERE db_mapping.url = $1 AND db_mapping."from" = $2;
 
 -- name: DeleteDBConnError :exec
 DELETE

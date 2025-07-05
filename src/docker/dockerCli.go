@@ -83,6 +83,8 @@ func createContainerConfig(imageTag string) *container.Config {
 			"50052/tcp": struct{}{},
 		},
 		Env: []string{}, //TODO
+		//TODO max backoff, uuid for worker, backoff strategy and initial backoff so we are consistent
+
 	}
 }
 

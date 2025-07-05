@@ -15,13 +15,15 @@ type WriterPerfectionist struct {
 	backoffType    string
 }
 
-func NewWriterPerfectionist(writer *Writer, maxRetries int) *WriterPerfectionist {
+func NewWriterPerfectionist(writer *Writer) *WriterPerfectionist {
 
 	//TODO ugly with the loggers
 
 	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
 	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
 	initBackoff := utils.ParseEnvDuration("INIT_RETRY_BACKOFF", 15*time.Millisecond, writer.Logger)
+
+	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, writer.Logger)
 
 	defaultBackoffStrategy := "exp"
 
@@ -89,12 +91,12 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 	return err
 }
 
-func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, rangeID string, url, migrationWorkerID string) error {
+func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq) error {
 
 	var err error
 
 	for i := 1; i <= w.maxRetries; i++ {
-		err = w.writer.AddMigrationJob(ctx, rangeID, url, migrationWorkerID)
+		err = w.writer.AddMigrationJob(ctx, addReq)
 		if err == nil {
 			return nil
 		}

@@ -104,7 +104,7 @@ func main() {
 		}
 	}(logger)
 
-	pool, err := utils.SetupDBConn(logger, ctx)
+	pool, err := goutils
 	if err != nil {
 		logger.Fatal("establishing connection to database failed, controller is fucking useless, stopping...", zap.Error(err))
 		return
@@ -196,16 +196,13 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 		Pool:   pool,
 	}
 
-	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, logger)
-
 	writerPerfectionist := database.NewWriterPerfectionist(
 		&dbWriter,
-		maxRetries,
 	)
 
 	readerPerfectionist := database.NewReaderPerfectionist(
 		&dbReader,
-		maxRetries)
+	)
 
 	dockerInterface, err := docker.New(logger)
 	if err != nil {

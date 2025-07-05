@@ -78,10 +78,14 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 	return nil
 }
 
+type MigrationJobAddReq struct {
+	From, To, Url, MWorkerId string
+}
+
 // AddMigrationJob takes a range with a given id from the mapping table and transfers it into the migrations table,
 // marking it to be migrated by the migration worker specified through the id. Executes within a transaction.
 // Returns an error if the operation fails.
-func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, url, mWorkerId string) error {
+func (w *Writer) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq) error {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -92,15 +96,13 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, url, mWorkerId st
 
 	q := database.New(tx)
 	params := database.CreateMigrationJobParams{
-		ID: pgtype.UUID{
-			Bytes: [16]byte([]byte(rangeId)),
-			Valid: true,
-		}, //id of the range
-		Url: url, //url of the db instance we want to migrate to
+		Url:  addReq.Url,
+		From: addReq.From,
+		To:   addReq.To,
 		MWorkerID: pgtype.UUID{
-			Bytes: [16]byte([]byte(mWorkerId)),
+			Bytes: [16]byte([]byte(addReq.MWorkerId)),
 			Valid: true,
-		}, //id of the worker responsible
+		},
 	}
 	err = q.CreateMigrationJob(ctx, params)
 	if err != nil {
@@ -112,7 +114,7 @@ func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, url, mWorkerId st
 		return fmt.Errorf("committing transaction failed: %w", commitErr)
 	}
 
-	w.Logger.Debug("successfully added migration job", zap.String("range_id", rangeId), zap.String("worker_id", mWorkerId))
+	w.Logger.Info("successfully added migration job", zap.String("from", addReq.From), zap.String("to", addReq.To), zap.String("worker_id", addReq.MWorkerId))
 	return nil
 }
 

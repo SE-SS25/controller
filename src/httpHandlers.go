@@ -78,7 +78,8 @@ func (c *Controller) migrationHandler() http.HandlerFunc {
 		}
 
 		//Get the rangeId from the URL request, fuck request bodies
-		rangeId := r.URL.Query().Get("rangeID")
+		from := r.URL.Query().Get("from")
+		to := r.URL.Query().Get("to")
 		goalUrl := r.URL.Query().Get("goal_url")
 
 		//generate a tracing id for the context received from the http call and save it in it

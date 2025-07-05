@@ -117,28 +117,35 @@ func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRan
 }
 
 // RunMigration creates a new migration job for the given rangeId. This range will be moved to the db with the provided url. For that a new migration worker will be created, or if there are available instances, one will be chosen
-func (s *Scheduler) RunMigration(ctx context.Context, rangeId, goalUrl string) error {
+func (s *Scheduler) RunMigration(ctx context.Context, from, to, goalUrl string) error {
 
 	//BUT how can we check if the migration is in processing -> maybe processing status
 	var migrationWorkerId string
 	newWorker := true
 
-	workerId, err := s.readerPerf.GetFreeMigrationWorker(ctx)
+	worker, err := s.readerPerf.GetFreeMigrationWorker(ctx)
 
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		//if there is no available migration worker, create a new one
 		migrationWorkerId = uuid.New().String()
 	case err == nil:
-		migrationWorkerId = workerId.String()
+		migrationWorkerId = worker.String()
 		newWorker = false
 	default:
 		s.logger.Error("could not get migration worker from database", zap.Error(err))
 		return fmt.Errorf("could not get migration worker from database, but error was NOT sql.NoRows: %w", err)
 	}
 
+	addReq := database.MigrationJobAddReq{
+		From:      from,
+		To:        to,
+		Url:       goalUrl,
+		MWorkerId: migrationWorkerId,
+	}
+
 	//copy the rangeId and its "from" to the migrations table with the url of the goal db instance and a workerId chosen by the algorithm
-	jobErr := s.writerPerf.AddMigrationJob(ctx, rangeId, goalUrl, migrationWorkerId)
+	jobErr := s.writerPerf.AddMigrationJob(ctx, addReq)
 	if jobErr != nil {
 		errW := fmt.Errorf("running migration failed: %w", jobErr)
 		s.logger.Error("could not migrate db-range", zap.Error(errW))
