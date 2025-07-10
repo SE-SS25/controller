@@ -10,6 +10,7 @@ import (
 
 func (c *Controller) RunHttpServer() {
 	http.Handle("/migrate", c.migrationHandler())
+	http.Handle("/mapping/startup", c.startupMapping())
 	http.Handle("/health", c.health())
 
 	var port string
@@ -78,14 +79,23 @@ func (c *Controller) migrationHandler() http.HandlerFunc {
 		}
 
 		//Get the rangeId from the URL request, fuck request bodies
+		r.URL.Query()
 		from := r.URL.Query().Get("from")
 		to := r.URL.Query().Get("to")
 		goalUrl := r.URL.Query().Get("goal_url")
 
+		c.logger.Info("got request to migrate", zap.String("from", from), zap.String("to", to), zap.String("goalUrl", goalUrl))
+
+		if from == "" || to == "" || goalUrl == "" {
+			c.logger.Warn("malformed request was sent, at least one parameter was empty")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		//generate a tracing id for the context received from the http call and save it in it
 		ctx := utils.GenerateCallTraceId(r.Context())
 
-		err := c.scheduler.RunMigration(ctx, rangeId, goalUrl)
+		err := c.scheduler.RunMigration(ctx, from, to, goalUrl)
 		if err != nil {
 			c.logger.Error("could not migrate db-range", zap.Error(err))
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -115,5 +125,15 @@ func (c *Controller) health() http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func (c *Controller) startupMapping() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		mapping := c.scheduler.CalculateStartupMapping(ctx)
+
+		c.scheduler.ExecuteStartUpMapping(ctx, mapping)
 	}
 }

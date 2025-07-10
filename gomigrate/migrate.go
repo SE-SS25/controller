@@ -15,6 +15,8 @@ func Migrate() error {
 
 	url := os.Getenv("PG_CONN")
 
+	println("starting the migrations")
+
 	db, err := sql.Open("postgres", url+"?sslmode=disable")
 	if err != nil {
 		return err
@@ -29,7 +31,7 @@ func Migrate() error {
 	pwd, _ := os.Getwd()
 	println(pwd)
 
-	m, err := migrate.NewWithDatabaseInstance("file://migrations", "postgres", driver)
+	m, err := migrate.NewWithDatabaseInstance("file://../migrations", "db", driver)
 	if err != nil {
 		return err
 	}
@@ -38,6 +40,7 @@ func Migrate() error {
 		return err
 	}
 
+	println("migrations finished without an error")
 	return nil
 
 }

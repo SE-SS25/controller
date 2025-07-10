@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	oe "controller/src/errors"
 	utils "controller/src/utils"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -51,12 +52,16 @@ func NewWriterPerfectionist(writer *Writer) *WriterPerfectionist {
 
 func (w *WriterPerfectionist) RemoveWorker(uuid pgtype.UUID, ctx context.Context) error {
 
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
-		err := w.writer.RemoveWorker(ctx, uuid)
-		if err == nil {
+		err = w.writer.RemoveWorker(ctx, uuid)
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {
@@ -71,13 +76,69 @@ func (w *WriterPerfectionist) RemoveWorker(uuid pgtype.UUID, ctx context.Context
 
 }
 
+func (w *WriterPerfectionist) AddMigrationWorker(uuid, from, to string, ctx context.Context) error {
+
+	var err oe.DbError
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.AddMigrationWorker(ctx, uuid, from, to)
+		if err.Err == nil {
+			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("removing migration worker failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("removing migration worker failed, retry limit reached", zap.Error(err))
+	return err
+
+}
+
+func (w *WriterPerfectionist) RemoveMigrationWorker(uuid string, ctx context.Context) error {
+
+	var err oe.DbError
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.RemoveMigrationWorker(ctx, uuid)
+		if err.Err == nil {
+			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("removing migration worker failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("removing migration worker failed, retry limit reached", zap.Int("retry", w.maxRetries), zap.Error(err))
+	return err
+
+}
+
 func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.Context) error {
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.AddDatabaseMapping(from, url, ctx)
-		if err == nil {
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {
@@ -93,12 +154,16 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 
 func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq) error {
 
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.AddMigrationJob(ctx, addReq)
-		if err == nil {
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {
@@ -114,12 +179,16 @@ func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq Migrat
 
 func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, timestamp pgtype.Timestamptz) error {
 
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.DeleteDbConnErrors(ctx, dbUrl, workerId, timestamp)
-		if err == nil {
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {
@@ -136,12 +205,16 @@ func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgty
 
 func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
 
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.Heartbeat(ctx)
-		if err == nil {
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {
@@ -158,12 +231,16 @@ func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
 
 func (w *WriterPerfectionist) RegisterController(ctx context.Context) error {
 
-	var err error
+	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.RegisterController(ctx)
-		if err == nil {
+		if err.Err == nil {
 			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
 		}
 
 		if i < w.maxRetries {

@@ -4,6 +4,7 @@ import (
 	"context"
 	sqlc "controller/src/database/sqlc"
 	"fmt"
+	guuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,14 +19,14 @@ type Reader struct {
 
 func (r *Reader) Ping(ctx context.Context) error {
 
-	r.Logger.Debug("Trying to ping sqlc")
+	r.Logger.Debug("Trying to ping the database")
 
 	err := r.Pool.Ping(ctx)
 	if err != nil {
 		return err
 	}
 
-	r.Logger.Debug("successfully pinged the sqlc", zap.Time("timestamp", time.Now()))
+	r.Logger.Debug("successfully pinged the database", zap.Time("timestamp", time.Now()))
 
 	return nil
 }
@@ -56,6 +57,31 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]sqlc.WorkerMetric, er
 	return workers, nil
 }
 
+func (r *Reader) GetAllMWorkerState(ctx context.Context) ([]sqlc.MigrationWorker, error) {
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("beeginning transaction failed: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	q := sqlc.New(tx)
+	workers, err := q.GetAllMWorkerState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting all migration workers failed: %w", err)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return nil, fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	r.Logger.Debug("successfully got migration workers")
+	return workers, nil
+
+}
+
 // GetSingleWorkerState retrieves the state of a single worker identified by workerID from the sqlc in a transaction.
 // Returns the WorkerMetric of the worker and an error if the operation fails.
 func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (sqlc.WorkerMetric, error) {
@@ -67,9 +93,14 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (sql
 
 	defer tx.Rollback(ctx)
 
+	parsed, err := guuid.Parse(workerID)
+	if err != nil {
+		return sqlc.WorkerMetric{}, fmt.Errorf("could not parse uuid")
+	}
+
 	q := sqlc.New(tx)
 	worker, err := q.GetSingleWorkerState(ctx, pgtype.UUID{
-		Bytes: [16]byte([]byte(workerID)),
+		Bytes: parsed,
 		Valid: true,
 	})
 	if err != nil {

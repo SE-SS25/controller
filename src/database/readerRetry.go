@@ -115,6 +115,27 @@ func (r *ReaderPerfectionist) GetAllWorkerState(ctx context.Context) ([]sqlc.Wor
 	return nil, err
 }
 
+func (r *ReaderPerfectionist) GetAllMWorkerState(ctx context.Context) ([]sqlc.MigrationWorker, error) {
+
+	var err error
+
+	for i := 1; i <= r.maxRetries; i++ {
+		state, err := r.reader.GetAllMWorkerState(ctx)
+		if err == nil {
+			return state, nil
+		}
+
+		if i < r.maxRetries {
+			r.reader.Logger.Warn("getting all worker states failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, r.initialBackoff)
+		}
+	}
+
+	r.reader.Logger.Error("getting all worker states failed, retry limit reached", zap.Error(err))
+	return nil, err
+}
+
 func (r *ReaderPerfectionist) GetSingleWorkerState(ctx context.Context, workerID string) (sqlc.WorkerMetric, error) {
 
 	var err error

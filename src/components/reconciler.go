@@ -3,10 +3,12 @@ package components
 import (
 	"context"
 	"controller/src/database"
-	sqlc "controller/src/database/sqlc"
+	"controller/src/docker"
 	ownErrors "controller/src/errors"
 	"controller/src/utils"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgtype"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"time"
 )
@@ -19,15 +21,17 @@ type Reconciler struct {
 	readerPerf *database.ReaderPerfectionist
 	writer     *database.Writer
 	writerPerf *database.WriterPerfectionist
+	dInterface docker.DInterface
 }
 
-func NewReconciler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist) Reconciler {
+func NewReconciler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist, dInterface docker.DInterface) Reconciler {
 	return Reconciler{
 		logger:     logger,
 		reader:     dbReader,
 		readerPerf: readerPerf,
 		writer:     dbWriter,
 		writerPerf: writerPerf,
+		dInterface: dInterface,
 	}
 }
 
@@ -117,24 +121,27 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 	//maybe refactor this ugly as hell
 	for _, worker := range workers {
 
+		r.logger.Debug("Reading data for worker", zap.String("uuid", worker.ID.String()))
+
 		//Delay = time_since_last_heartbeat - specified_heartbeat_frequency
-		err = workerHeartbeatOK(worker, timeout, r.logger)
+		err = workerHeartbeatOK(worker.LastHeartbeat, timeout, r.logger)
 		if err != nil {
 
-			r.logger.Warn("Detected delayed worker heartbeat, trying again", zap.Error(err))
+			go func() {
+				r.logger.Warn("Detected delayed worker heartbeat, trying again", zap.Error(err), zap.String("workerId", worker.ID.String()))
 
-			//Recheck the state of the worker to see if it still recovers, if it doesn't remove it
-			workerState, dbErr := r.readerPerf.GetSingleWorkerState(ctx, worker.ID.String())
-			if dbErr != nil || workerHeartbeatOK(workerState, timeout, r.logger) != nil {
+				//Recheck the state of the worker to see if it still recovers, if it doesn't remove it
+				workerState, dbErr := r.readerPerf.GetSingleWorkerState(ctx, worker.ID.String())
+				if dbErr != nil || workerHeartbeatOK(workerState.LastHeartbeat, timeout, r.logger) != nil {
 
-				r.logger.Warn("worker did not recover or could not be fetched from db; removing...", zap.String("workerId", worker.ID.String()), zap.NamedError("dbErr", err), zap.Bool("heartBeatOk", workerHeartbeatOK(workerState, timeout, r.logger) == nil))
+					r.logger.Warn("worker did not recover or could not be fetched from db; removing...", zap.String("workerId", worker.ID.String()), zap.NamedError("dbErr", err), zap.Bool("heartBeatOk", workerHeartbeatOK(worker.LastHeartbeat, timeout, r.logger) == nil))
 
-				if removeErr := r.writerPerf.RemoveWorker(worker.ID, ctx); err != nil {
-					r.logger.Error("could not remove non-functional worker from table", zap.String("workerId", worker.ID.String()), zap.Error(removeErr))
-					continue
+					if removeErr := r.writerPerf.RemoveWorker(worker.ID, ctx); err != nil {
+						r.logger.Error("could not remove non-functional worker from table", zap.String("workerId", worker.ID.String()), zap.Error(removeErr))
+					}
+
 				}
-
-			}
+			}()
 
 		}
 
@@ -156,7 +163,6 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 
 				if removeErr := r.writerPerf.RemoveWorker(worker.ID, ctx); err != nil {
 					r.logger.Error("could not remove non-functional worker from table", zap.String("workerId", worker.ID.String()), zap.Error(removeErr))
-					return
 				}
 			}()
 		}
@@ -165,6 +171,42 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 
 	return nil
 
+}
+
+func (r *Reconciler) EvaluateMigrationWorkerState(ctx context.Context) error {
+
+	migrationWorkerState, err := r.readerPerf.GetAllMWorkerState(ctx)
+	if err != nil {
+		r.logger.Error("error getting the migration worker state")
+		return err
+	}
+
+	maxAgeHeartbeat := goutils.ParseEnvDurationDefault("WORKER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
+
+	workersPresent := false
+	for _, worker := range migrationWorkerState {
+
+		workersPresent = true
+
+		//TODO: ignoring the uptime for now
+		err = workerHeartbeatOK(worker.LastHeartbeat, maxAgeHeartbeat, r.logger)
+		if err != nil {
+			r.logger.Warn("heartbeat for migration worker was not ok, removing from the database", zap.String("workerId", worker.ID.String()))
+
+			err = r.writerPerf.RemoveMigrationWorker(worker.ID.String(), ctx)
+			if err != nil {
+				r.logger.Error("could not remove migration worker from the table")
+			}
+
+		}
+
+	}
+
+	if !workersPresent {
+		r.logger.Debug("there are currently no migration workers running")
+	}
+
+	return nil
 }
 
 // CheckFailureRate queries all rows from the corresponding table in the database and runs some simple data aggregation to determine whether there is an unusually high failure rate in the last half hour (this goes for dbs, workers or db-worker-relationships)
@@ -286,20 +328,17 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 
 // workerHeartbeatOK checks if a worker's last heartbeat is valid and within the allowed timeout.
 // Returns an error if the heartbeat is invalid or delayed beyond the timeout, otherwise returns nil.
-func workerHeartbeatOK(worker sqlc.WorkerMetric, timeout time.Duration, logger *zap.Logger) error {
-	uuid := worker.ID
+func workerHeartbeatOK(heartbeat pgtype.Timestamptz, timeout time.Duration, logger *zap.Logger) error {
 
-	logger.Debug("Reading data for worker", zap.String("uuid", uuid.String()))
-
-	if worker.LastHeartbeat.Valid == false {
-		return fmt.Errorf("heartbeat of worker does not have a valid return from pg: %s", uuid.String())
+	if heartbeat.Valid == false {
+		return fmt.Errorf("heartbeat of worker does not have a valid return from pg")
 	}
 
-	timeSinceHeartbeat := time.Now().Sub(worker.LastHeartbeat.Time)
+	timeSinceHeartbeat := time.Now().Sub(heartbeat.Time)
 
 	if timeSinceHeartbeat > timeout {
 		delay := timeSinceHeartbeat - timeout
-		return fmt.Errorf("delay of worker heartbeat is higher than maximum limit - delay: %v worker %s", delay, uuid.String())
+		return fmt.Errorf("delay of worker heartbeat is higher than maximum limit - delay: %v", delay)
 	}
 
 	return nil

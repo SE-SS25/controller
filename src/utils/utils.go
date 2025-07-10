@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"controller/src/docker"
+	"controller/src/errors"
 	"math"
 	"strconv"
 	"time"
@@ -24,4 +26,13 @@ func SetShadowPort(portString string) (string, error) {
 	portInt++
 
 	return strconv.Itoa(portInt), nil
+}
+
+func ChanWihTimeout(cr docker.CreateRequest) error {
+	select {
+	case resp := <-cr.ResponseChan:
+		return resp
+	case <-time.After(5 * time.Second):
+		return errors.ErrCreateTimeout
+	}
 }

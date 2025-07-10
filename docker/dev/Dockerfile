@@ -5,6 +5,7 @@ COPY ./src ./src
 COPY ./go.sum .
 COPY ./go.mod .
 
+COPY ./migrations ./migrations
 COPY ./gomigrate ./gomigrate
 
 ENV APP_ENV=dev
