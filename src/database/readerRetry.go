@@ -5,6 +5,7 @@ import (
 	sqlc "controller/src/database/sqlc"
 	"controller/src/utils"
 	"github.com/jackc/pgx/v5/pgtype"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"time"
 )
@@ -22,13 +23,13 @@ func NewReaderPerfectionist(reader *Reader) *ReaderPerfectionist {
 
 	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
 	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
-	initBackoff := utils.ParseEnvDuration("INIT_RETRY_BACKOFF", 15*time.Millisecond, reader.Logger)
+	initBackoff := goutils.Log().ParseEnvDurationDefault("INIT_RETRY_BACKOFF", 15*time.Millisecond, reader.Logger)
 
-	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, reader.Logger)
+	maxRetries := goutils.Log().ParseEnvIntDefault("MAX_RETRIES", 3, reader.Logger)
 
 	defaultBackoffStrategy := "exp"
 
-	backoffTypeInput := utils.ParseEnvStringWithDefault("BACKOFF_TYPE", defaultBackoffStrategy, reader.Logger)
+	backoffTypeInput := goutils.Log().ParseEnvStringDefault("BACKOFF_TYPE", defaultBackoffStrategy, reader.Logger)
 
 	var backoffType string
 

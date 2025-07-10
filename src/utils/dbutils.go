@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
-	"os"
 )
 
 func SetupDBConn(logger *zap.Logger, ctx context.Context) (*pgxpool.Pool, error) {
 
-	pgConn := os.Getenv("PG_CONN")
+	pgConn := goutils.Log().ParseEnvStringPanic("PG_CONN", logger)
 	logger.Debug("Connecting to database", zap.String("conn_string", pgConn))
 
 	pool, err := pgxpool.New(ctx, pgConn)
@@ -34,13 +34,13 @@ func SetupDBConn(logger *zap.Logger, ctx context.Context) (*pgxpool.Pool, error)
 func Must(execRes pgconn.CommandTag, execErr error) oe.DbError {
 	if execErr != nil {
 		return oe.DbError{
-			Err:          fmt.Errorf("removing migration worker failed: %w", execErr),
+			Err:          fmt.Errorf("execution error occurred: %w", execErr),
 			Reconcilable: true,
 		}
 	}
 	if execRes.RowsAffected() == 0 {
 		return oe.DbError{
-			Err:          fmt.Errorf("no rows affected by removing migration worker WHY is this not an error - reason: %s", execRes.String()),
+			Err:          fmt.Errorf("no execution error but no rows affected: %s", execRes.String()),
 			Reconcilable: false,
 		}
 	}

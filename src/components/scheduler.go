@@ -169,7 +169,7 @@ func (s *Scheduler) RunMigration(ctx context.Context, from, to, goalUrl string) 
 
 		s.logger.Info("sending request to dockerClient to create a new migration worker", zap.Any("traceID", traceId))
 
-		req := s.dockerInterface.SendMWorkerRequest(ctx)
+		req := s.dockerInterface.SendMWorkerRequest(ctx, migrationWorkerId)
 		responseErr := utils.ChanWihTimeout(req)
 		if responseErr != nil {
 			errW := fmt.Errorf("spawning migration worker failed: %w", responseErr)
@@ -181,6 +181,8 @@ func (s *Scheduler) RunMigration(ctx context.Context, from, to, goalUrl string) 
 				s.logger.Error("could not remove migration worker from database", zap.Error(err))
 				return fmt.Errorf("could not remove migration worker from database, but error was NOT sql.NoRows: %w", err)
 			}
+
+			s.logger.Info("successfully removed migration worker from database starting the container failed")
 		}
 	}
 

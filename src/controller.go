@@ -4,8 +4,8 @@ import (
 	"context"
 	"controller/src/components"
 	customErr "controller/src/errors"
-	"controller/src/utils"
 	"errors"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"os"
 	"time"
@@ -22,7 +22,7 @@ type Controller struct {
 // It calls the reconciler's Heartbeat method and logs a fatal error if the heartbeat fails.
 // The function sleeps for the configured heartbeat interval between each heartbeat.
 func (c *Controller) heartbeat(ctx context.Context) {
-	heartbeatInterval := utils.ParseEnvDuration("HEARTBEAT_BACKOFF", 5*time.Second, c.logger)
+	heartbeatInterval := goutils.Log().ParseEnvDurationDefault("HEARTBEAT_BACKOFF", 5*time.Second, c.logger)
 
 	for {
 		start := time.Now()
@@ -49,7 +49,7 @@ func (c *Controller) heartbeat(ctx context.Context) {
 func (c *Controller) checkControllerUp(ctx context.Context) {
 	for c.isShadow {
 
-		checkInterval := utils.ParseEnvDuration("CHECK_CONTROLLER_BACKOFF", 3*time.Second, c.logger)
+		checkInterval := goutils.Log().ParseEnvDurationDefault("CHECK_CONTROLLER_BACKOFF", 3*time.Second, c.logger)
 
 		start := time.Now()
 

@@ -5,7 +5,6 @@ import (
 	"controller/src/database"
 	"controller/src/docker"
 	ownErrors "controller/src/errors"
-	"controller/src/utils"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgtype"
 	goutils "github.com/linusgith/goutils/pkg/env_utils"
@@ -69,7 +68,7 @@ func (r *Reconciler) RegisterController(ctx context.Context) error {
 // CheckControllerUp checks if the controller has a valid heartbeat and if not, activates the shadow as the new controller
 func (r *Reconciler) CheckControllerUp(ctx context.Context) error {
 
-	timeout := utils.ParseEnvDuration("CONTROLLER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
+	timeout := goutils.Log().ParseEnvDurationDefault("CONTROLLER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
 
 	state, err := r.readerPerf.GetControllerState(ctx)
 	if err != nil {
@@ -106,7 +105,7 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 	var minimumUptime time.Duration
 
 	if !isScaling {
-		minimumUptime = utils.ParseEnvDuration("MINIMUM_WORKER_UPTIME", 5*time.Second, r.logger)
+		minimumUptime = goutils.Log().ParseEnvDurationDefault("MINIMUM_WORKER_UPTIME", 5*time.Second, r.logger)
 	}
 
 	workers, err := r.readerPerf.GetAllWorkerState(ctx)
@@ -181,7 +180,7 @@ func (r *Reconciler) EvaluateMigrationWorkerState(ctx context.Context) error {
 		return err
 	}
 
-	maxAgeHeartbeat := goutils.ParseEnvDurationDefault("WORKER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
+	maxAgeHeartbeat := goutils.Log().ParseEnvDurationDefault("WORKER_HEARTBEAT_TIMEOUT", 10*time.Second, r.logger)
 
 	workersPresent := false
 	for _, worker := range migrationWorkerState {

@@ -7,10 +7,9 @@ import (
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
-	"github.com/goforj/godump"
 	"github.com/google/uuid"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
-	"os"
 )
 
 type DInterface struct {
@@ -22,6 +21,7 @@ type DInterface struct {
 
 type CreateRequest struct {
 	ctx          context.Context
+	workerId     string
 	ResponseChan chan error
 }
 
@@ -113,12 +113,13 @@ func (d *DInterface) SendWorkerRequest(ctx context.Context) CreateRequest {
 
 }
 
-func (d *DInterface) SendMWorkerRequest(ctx context.Context) CreateRequest {
+func (d *DInterface) SendMWorkerRequest(ctx context.Context, workerId string) CreateRequest {
 
 	respChannel := make(chan error, 1)
 
 	req := CreateRequest{
 		ctx:          ctx,
+		workerId:     workerId,
 		ResponseChan: respChannel,
 	}
 
@@ -133,50 +134,47 @@ func (d *DInterface) startMigrationWorker(req CreateRequest) error {
 	ctx := req.ctx
 	traceID := ctx.Value("traceID")
 
-	imageTag := os.Getenv("M_WORKER_IMAGE_TAG")
+	imageTag := goutils.NoLog().ParseEnvStringPanic("M_WORKER_IMAGE_TAG")
 
 	//name the container with prefix and shortened uuid (may have stolen this from hyperfaas)
-	containerNamePrefix := os.Getenv("M_WORKER_CONTAINER_PREFIX")
+	containerNamePrefix := goutils.NoLog().ParseEnvStringPanic("M_WORKER_CONTAINER_PREFIX")
 	shortenedUUID := uuid.New().String()[0:8]
 	containerName := containerNamePrefix + "-" + shortenedUUID
 
 	//I am assuming here that the image already exists locally and does not have to be pulled
 
-	containerConfig := createContainerConfig(imageTag)
+	containerConfig := createContainerConfig(imageTag, req.workerId)
 	hostConfig := createHostConfig()
 
-	createInfo, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, &network.NetworkingConfig{}, nil, containerName)
+	_, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, &network.NetworkingConfig{}, nil, containerName)
 	if err != nil {
 		return fmt.Errorf("could not create container: %w", err)
 	}
-
-	d.logger.Debug("successfully created docker container for migration worker",
-		zap.String("info", godump.DumpStr(createInfo)),
-		zap.String("containerConfig", godump.DumpStr(containerConfig)),
-		zap.String("hostConfig", godump.DumpStr(hostConfig)),
-		zap.Any("traceID", traceID),
-	)
 
 	err = d.client.ContainerStart(ctx, containerName, container.StartOptions{})
 	if err != nil {
 		return fmt.Errorf("could not start container: %w", err)
 	}
 
-	d.logger.Debug("successfully started migration worker", zap.String("containerName", containerName))
+	d.logger.Debug("successfully started migration worker", zap.String("containerName", containerName), zap.Any("traceID", traceID))
 
 	return nil
 
 }
 
-func createContainerConfig(imageTag string) *container.Config {
+func createContainerConfig(imageTag string, workerId string) *container.Config {
 	return &container.Config{
 		Image: imageTag,
 		ExposedPorts: nat.PortSet{
 			"50052/tcp": struct{}{},
 		},
-		Env: []string{},
-		//TODO max backoff, uuid for worker, backoff strategy and initial backoff so we are consistent
-
+		Env: []string{
+			"PG_CONN", goutils.NoLog().ParseEnvStringPanic("PG_CONN"),
+			"UUID", workerId,
+			"APP_ENV", goutils.NoLog().ParseEnvStringPanic("APP_ENV"),
+			"RETRIES", "5",
+			"HEARTBEAT_BACKOFF", "3",
+		},
 	}
 }
 

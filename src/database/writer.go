@@ -91,11 +91,14 @@ func (w *Writer) AddMigrationWorker(ctx context.Context, uuid, from, to string) 
 	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
 		return oeErr
 	}
+	w.Logger.Debug("changed rows", zap.Int64("count", execRes.RowsAffected()))
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
 		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
+
+	select {}
 
 	w.Logger.Debug("successfully added migration worker", zap.String("worker_uuid", uuid))
 	return oe.DbError{Err: nil}

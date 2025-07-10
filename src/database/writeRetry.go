@@ -5,6 +5,7 @@ import (
 	oe "controller/src/errors"
 	utils "controller/src/utils"
 	"github.com/jackc/pgx/v5/pgtype"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"time"
 )
@@ -22,13 +23,13 @@ func NewWriterPerfectionist(writer *Writer) *WriterPerfectionist {
 
 	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
 	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
-	initBackoff := utils.ParseEnvDuration("INIT_RETRY_BACKOFF", 15*time.Millisecond, writer.Logger)
+	initBackoff := goutils.Log().ParseEnvDurationDefault("INIT_RETRY_BACKOFF", 15*time.Millisecond, writer.Logger)
 
-	maxRetries := utils.ParseEnvInt("MAX_RETRIES", 3, writer.Logger)
+	maxRetries := goutils.Log().ParseEnvIntDefault("MAX_RETRIES", 3, writer.Logger)
 
 	defaultBackoffStrategy := "exp"
 
-	backoffTypeInput := utils.ParseEnvStringWithDefault("BACKOFF_TYPE", defaultBackoffStrategy, writer.Logger)
+	backoffTypeInput := goutils.Log().ParseEnvStringDefault("BACKOFF_TYPE", defaultBackoffStrategy, writer.Logger)
 
 	var backoffType string
 
@@ -83,6 +84,7 @@ func (w *WriterPerfectionist) AddMigrationWorker(uuid, from, to string, ctx cont
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.AddMigrationWorker(ctx, uuid, from, to)
 		if err.Err == nil {
+			w.writer.Logger.Info("add migration worker error is nil")
 			return nil
 		}
 

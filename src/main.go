@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/goforj/godump"
 	"github.com/jackc/pgx/v5/pgxpool"
+	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -58,7 +59,7 @@ func createDevelopmentLogger() *zap.Logger {
 	encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 
 	config := zap.Config{
-		Level:         zap.NewAtomicLevelAt(zap.InfoLevel),
+		Level:         zap.NewAtomicLevelAt(zap.DebugLevel),
 		Development:   true,
 		Encoding:      "json",
 		EncoderConfig: encoderCfg,
@@ -83,7 +84,7 @@ func main() {
 	var logger *zap.Logger
 
 	//Configure the logger depending on app environment
-	env := os.Getenv("APP_ENV")
+	env := goutils.NoLog().ParseEnvStringPanic("APP_ENV")
 
 	switch env {
 	case "prod":
@@ -141,12 +142,12 @@ func main() {
 	//If this controller is the shadow, it should get stuck in this function
 	controller.checkControllerUp(ctx)
 
-	timeout := utils.ParseEnvDuration("WORKER_HEARTBEAT_TIMEOUT", 5*time.Second, logger)
+	timeout := goutils.Log().ParseEnvDurationDefault("WORKER_HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 
 	// Function to evaluate worker state
 	go func() {
 
-		checkInterval := utils.ParseEnvDuration("CHECK_WORKER_BACKOFF", 5*time.Second, logger)
+		checkInterval := goutils.Log().ParseEnvDurationDefault("CHECK_WORKER_BACKOFF", 5*time.Second, logger)
 
 		for {
 
@@ -232,7 +233,7 @@ func setupStructs(pool *pgxpool.Pool, logger *zap.Logger) (components.Scheduler,
 		scheduler:  scheduler,
 		reconciler: reconciler,
 		logger:     logger.With(zap.String("component", "httpHandler")),
-		isShadow:   strings.ToLower(os.Getenv("SHADOW")) == "true",
+		isShadow:   strings.ToLower(goutils.NoLog().ParseEnvStringPanic("SHADOW")) == "true",
 	}
 
 	return scheduler, reconciler, dockerInterface, gauntlet
