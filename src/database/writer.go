@@ -3,9 +3,12 @@ package database
 import (
 	"context"
 	database "controller/src/database/sqlc"
+	oe "controller/src/errors"
+	"controller/src/utils"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	guuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,6 +16,9 @@ import (
 	"time"
 )
 
+// Writer is a struct that provides methods to write to the database.
+// It contains a logger for logging operations and a connection pool for database interactions.
+// The methods are very similar and the names are self-explanatory.
 type Writer struct {
 	Logger *zap.Logger
 	Pool   *pgxpool.Pool
@@ -20,37 +26,238 @@ type Writer struct {
 
 // RemoveWorker removes a worker from the database by UUID within a transaction.
 // Logs the operation and returns an error if the operation fails.
-func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) error {
+func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
 
 	q := database.New(tx)
-	err = q.DeleteWorker(ctx, uuid)
-	if err != nil {
-		return fmt.Errorf("removing worker failed: %w", err)
+	execRes, execErr := q.DeleteWorker(ctx, uuid)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
 	w.Logger.Debug("successfully removed worker", zap.String("worker_uuid", uuid.String()))
-	return nil
+	return oe.DbError{Err: nil}
+}
+
+// AddMigrationWorker adds a new migration worker to the database with the specified UUID, from, and to values.
+func (w *Writer) AddMigrationWorker(ctx context.Context, uuid, from, to string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	parsed, err := guuid.Parse(uuid)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid"), Reconcilable: false}
+	}
+
+	q := database.New(tx)
+	args := database.AddMigrationWorkerParams{
+		ID: pgtype.UUID{
+			Bytes: parsed,
+			Valid: true,
+		},
+		LastHeartbeat: pgtype.Timestamptz{
+			Time:             time.Now(),
+			InfinityModifier: 0,
+			Valid:            true,
+		},
+		Uptime: pgtype.Interval{
+			Microseconds: 0,
+			Days:         0,
+			Months:       0,
+			Valid:        true,
+		},
+		WorkingOnFrom: pgtype.Text{
+			String: from,
+			Valid:  true,
+		},
+		WorkingOnTo: pgtype.Text{
+			String: to,
+			Valid:  true,
+		},
+	}
+	execRes, execErr := q.AddMigrationWorker(ctx, args)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+	w.Logger.Debug("changed rows", zap.Int64("count", execRes.RowsAffected()))
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully added migration worker", zap.String("worker_uuid", uuid))
+	return oe.DbError{Err: nil}
+
+}
+
+// RemoveMigrationWorker removes a migration worker from the database by UUID.
+func (w *Writer) RemoveMigrationWorker(ctx context.Context, uuid string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	parsed, err := guuid.Parse(uuid)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid"), Reconcilable: false}
+	}
+
+	q := database.New(tx)
+
+	args := database.DeleteWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: parsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.DeleteWorkerJobJoin(ctx, args)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	execRes, execErr = q.DeleteMigrationWorker(ctx, pgtype.UUID{
+		Bytes: parsed,
+		Valid: true,
+	})
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully removed migration worker", zap.String("worker_uuid", uuid))
+	return oe.DbError{Err: nil}
+
+}
+
+// AddWorkerJobJoin adds a relationship between a worker and a migration job in the database.
+func (w *Writer) AddWorkerJobJoin(ctx context.Context, workerId, migrationId string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	workerParsed, err := guuid.Parse(workerId)
+	migrationParsed, err := guuid.Parse(migrationId)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid: %v", err), Reconcilable: false}
+	}
+
+	q := database.New(tx)
+	params := database.CreateWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: workerParsed,
+			Valid: true,
+		},
+		MigrationID: pgtype.UUID{
+			Bytes: migrationParsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.CreateWorkerJobJoin(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully added relationship between worker and migration job", zap.String("workerId", workerId), zap.String("jobId", migrationId))
+	return oe.DbError{Err: nil}
+}
+
+// RemoveMWorkerAndJobs removes a migration worker and all its associated jobs from the database.
+func (w *Writer) RemoveMWorkerAndJobs(ctx context.Context, workerId string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	parsed, err := guuid.Parse(workerId)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid"), Reconcilable: false}
+	}
+
+	//In one transaction, remove the jobs first and then the migration worker (else there will be a fk constraint err)
+	q := database.New(tx)
+
+	args := database.DeleteWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: parsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.DeleteWorkerJobJoin(ctx, args)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	execRes, execErr = q.DeleteWorkerJob(ctx, pgtype.UUID{
+		Bytes: parsed,
+		Valid: true,
+	})
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	w.Logger.Debug("successfully removed worker jobs", zap.String("workerId", workerId))
+
+	execRes, execErr = q.DeleteMigrationWorker(ctx, pgtype.UUID{
+		Bytes: parsed,
+		Valid: true,
+	})
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully removed migration worker and its jobs", zap.String("worker_uuid", workerId))
+	return oe.DbError{Err: nil}
+
 }
 
 // AddDatabaseMapping adds a new mapping for a range to a database URL in the mapping table.
 // Executes within a transaction and logs the result. Returns an error if the operation fails.
-func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error {
+func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction failed: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
@@ -64,65 +271,78 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) error
 		Url:  url,
 		From: from,
 	}
-	err = q.CreateMapping(ctx, params)
-	if err != nil {
-		return fmt.Errorf("adding database mapping failed: %w", err)
+	execRes, execErr := q.CreateMapping(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
 	w.Logger.Debug("successfully added database mapping", zap.String("from", from), zap.String("url", url))
-	return nil
+	return oe.DbError{Err: nil}
+}
+
+// MigrationJobAddReq is a struct that holds the parameters required to add a migration job.
+type MigrationJobAddReq struct {
+	From, To, Url, MWorkerId string
 }
 
 // AddMigrationJob takes a range with a given id from the mapping table and transfers it into the migrations table,
 // marking it to be migrated by the migration worker specified through the id. Executes within a transaction.
 // Returns an error if the operation fails.
-func (w *Writer) AddMigrationJob(ctx context.Context, rangeId, url, mWorkerId string) error {
+func (w *Writer) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq, migrationJobId uuid.UUID) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction failed: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
 
+	parsed, err := guuid.Parse(addReq.MWorkerId)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid"), Reconcilable: false}
+	}
+
 	q := database.New(tx)
 	params := database.CreateMigrationJobParams{
 		ID: pgtype.UUID{
-			Bytes: [16]byte([]byte(rangeId)),
+			Bytes: migrationJobId,
 			Valid: true,
-		}, //id of the range
-		Url: url, //url of the db instance we want to migrate to
+		},
+		Url: addReq.Url,
 		MWorkerID: pgtype.UUID{
-			Bytes: [16]byte([]byte(mWorkerId)),
+			Bytes: parsed,
 			Valid: true,
-		}, //id of the worker responsible
+		},
+		From:   addReq.From,
+		To:     addReq.To,
+		Status: "waiting", //status after creation always waiting
 	}
-	err = q.CreateMigrationJob(ctx, params)
-	if err != nil {
-		return fmt.Errorf("adding migration job to database failed: %w", err)
+	execRes, execErr := q.CreateMigrationJob(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
-	w.Logger.Debug("successfully added migration job", zap.String("range_id", rangeId), zap.String("worker_id", mWorkerId))
-	return nil
+	w.Logger.Info("successfully added migration job", zap.String("from", addReq.From), zap.String("to", addReq.To), zap.String("worker_id", addReq.MWorkerId))
+	return oe.DbError{Err: nil}
 }
 
 // DeleteDbConnErrors deletes database connection error records for a given database URL, worker ID, and failure time.
 // Executes within a transaction and logs the result. Returns an error if the operation fails.
-func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamptz) error {
+func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, failTime pgtype.Timestamptz) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction failed: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
@@ -134,29 +354,29 @@ func (w *Writer) DeleteDbConnErrors(ctx context.Context, dbUrl pgtype.Text, work
 		FailTime: failTime,
 	}
 
-	deletionErr := q.DeleteDBConnError(ctx, params)
-	if deletionErr != nil {
-		return fmt.Errorf("removing outdated dbConnErr from database failed: %w", deletionErr)
+	execRes, execErr := q.DeleteDBConnError(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
 	w.Logger.Debug("successfully deleted db connection errors", zap.String("db_url", dbUrl.String), zap.String("worker_id", workerId.String()), zap.Time("fail_time", failTime.Time))
-	return nil
+	return oe.DbError{Err: nil}
 }
 
 // Heartbeat updates the controller's heartbeat in the database, carrying over the scaling state.
 // Deletes the old heartbeat and creates a new one in a transaction. Returns an error if the operation fails.
-func (w *Writer) Heartbeat(ctx context.Context) error {
+func (w *Writer) Heartbeat(ctx context.Context) oe.DbError {
 
 	w.Logger.Debug("attempting to update heartbeat", zap.Time("timestamp", time.Now()))
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction failed: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
@@ -165,12 +385,12 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 
 	state, queryErr := q.GetControllerState(ctx)
 	if queryErr != nil {
-		return fmt.Errorf("getting old controller state failed: %w", queryErr)
+		return oe.DbError{Err: fmt.Errorf("getting old controller state failed: %w", queryErr), Reconcilable: true}
 	}
 
-	delErr := q.DeleteOldControllerHeartbeat(ctx)
-	if delErr != nil {
-		return fmt.Errorf("deleting old controller state failed: %w", delErr)
+	execRes, execErr := q.DeleteOldControllerHeartbeat(ctx)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
@@ -183,27 +403,27 @@ func (w *Writer) Heartbeat(ctx context.Context) error {
 		},
 	}
 
-	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
-	if creationErr != nil {
-		return fmt.Errorf("creating new heartbeat failed: %w", creationErr)
+	execRes, execErr = q.CreateNewControllerHeartbeat(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
 	w.Logger.Debug("successfully updated controller heartbeat", zap.Bool("scaling", state.Scaling), zap.Time("last_heartbeat", params.LastHeartbeat.Time))
-	return nil
+	return oe.DbError{Err: nil}
 }
 
 // RegisterController registers a new controller instance. Handles controller takeover or first-time registration,
 // updates the heartbeat, and logs the event. Returns an error if the operation fails.
-func (w *Writer) RegisterController(ctx context.Context) error {
+func (w *Writer) RegisterController(ctx context.Context) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("beginning transaction failed: %w", err)
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
 	}
 
 	defer tx.Rollback(ctx)
@@ -214,16 +434,18 @@ func (w *Writer) RegisterController(ctx context.Context) error {
 	switch {
 	case queryErr == nil:
 		// Controller takeover: delete the old heartbeat
-		if delErr := q.DeleteOldControllerHeartbeat(ctx); delErr != nil {
-			return fmt.Errorf("deleting old controller state failed: %w", delErr)
+		execRes, execErr := q.DeleteOldControllerHeartbeat(ctx)
+		if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+			return oeErr
 		}
+
 	case errors.Is(queryErr, pgx.ErrNoRows):
 		// No previous controller found
 		w.Logger.Debug("there has not been a controller before, starting the bloodline")
 		state.Scaling = false
 	case queryErr != nil:
 		// Unexpected error
-		return fmt.Errorf("getting controller state failed, but err was not 'no rows': %w", queryErr)
+		return oe.DbError{Err: fmt.Errorf("getting controller state failed, but err was not 'no rows': %w", queryErr), Reconcilable: true}
 	}
 
 	//carry over the old state of whether the controller is currently scaling or not, we do not want to keep this state locally as the controller can crash at any time
@@ -236,17 +458,17 @@ func (w *Writer) RegisterController(ctx context.Context) error {
 		},
 	}
 
-	creationErr := q.CreateNewControllerHeartbeat(ctx, params)
-	if creationErr != nil {
-		return fmt.Errorf("creating new heartbeat failed: %w", creationErr)
+	execRes, execErr := q.CreateNewControllerHeartbeat(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		return fmt.Errorf("committing transaction failed: %w", commitErr)
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
 	w.Logger.Debug("successfully updated controller heartbeat for new controller", zap.Bool("scaling", state.Scaling), zap.Time("last_heartbeat", params.LastHeartbeat.Time))
-	return nil
+	return oe.DbError{Err: nil}
 
 }

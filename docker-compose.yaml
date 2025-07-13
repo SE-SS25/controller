@@ -8,18 +8,42 @@ services:
       - env/.env
     environment:
       SHADOW: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "1234:1234"
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - matrix-kingdom
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:1234/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:1234/health" ]
       interval: 5s
       retries: 1
       timeout: 30s
+
+  worker:
+    image: ghcr.io/se-ss25/matrix_worker:v0.2.6
+    # container_name: matrix-lord
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://worker:vhpR5SMrNcpNQ5js7HW44HkSrFvmS3KkEdMMkos8abZNzXRQQg@94.16.107.194:22359/chats
+      - ALLOW_ORIGIN_URL=http://localhost:8080
+    expose:
+      - "8080"
+    networks:
+      - matrix-kingdom
+    deploy:
+      replicas: 5
+      restart_policy:
+        condition: on-failure
+
+  monitor:
+    image: ghcr.io/se-ss25/matrix_monitor
+    container_name: matrix-monitor
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://worker:vhpR5SMrNcpNQ5js7HW44HkSrFvmS3KkEdMMkos8abZNzXRQQg@94.16.107.194:22359/chats
+    networks:
+      - matrix-kingdom
 
   controller-shadow:
     container_name: matrix-controller-shadow
@@ -30,6 +54,8 @@ services:
       - env/.env
     environment:
       SHADOW: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "1235:1235"
     networks:
@@ -43,23 +69,135 @@ services:
       retries: 1
       timeout: 30s
 
-
-  postgres:
-    image: postgres
-    command: -c 'max_connections=1000'
-    container_name: matrix-pg
+  mongo-1:
+    image: mongo
+    container_name: matrix-mongo-1
     restart: unless-stopped
-    env_file:
-      - env/.env.database
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
     volumes:
-      - matrix-pg_db:/var/lib/postgresql/data
+      - matrix-mongo_db-1:/data/db
     ports:
-      - "5432:5432"
+      - "27017:27017"
     networks:
       - matrix-kingdom
-    healthcheck:
-      test: [ "CMD-SHELL", "sh -c 'pg_isready -U username -d db'" ]
 
+  mongo-2:
+    image: mongo
+    container_name: matrix-mongo-2
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - matrix-mongo_db-2:/data/db
+    ports:
+      - "27018:27017"
+    networks:
+      - matrix-kingdom
+
+  mongo-3:
+    image: mongo
+    container_name: matrix-mongo-3
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - matrix-mongo_db-3:/data/db
+    ports:
+      - "27019:27017"
+    networks:
+      - matrix-kingdom
+
+  mongo-4:
+    image: mongo
+    container_name: matrix-mongo-4
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - matrix-mongo_db-4:/data/db
+    ports:
+      - "27020:27017"
+    networks:
+      - matrix-kingdom
+
+  mongo-express-1:
+    image: mongo-express
+    container_name: matrix-mongo_express-1
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo-1:27017/
+      ME_CONFIG_BASICAUTH: false
+    ports:
+      - "8079:8081"
+    networks:
+      - matrix-kingdom
+
+
+  mongo-express-2:
+    image: mongo-express
+    container_name: matrix-mongo_express-2
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo-2:27017/
+      ME_CONFIG_BASICAUTH: false
+    ports:
+      - "8078:8081"
+    networks:
+      - matrix-kingdom
+
+  mongo-express-3:
+    image: mongo-express
+    container_name: matrix-mongo_express-3
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo-3:27017/
+      ME_CONFIG_BASICAUTH: false
+    ports:
+      - "8077:8081"
+    networks:
+      - matrix-kingdom
+
+  mongo-express-4:
+    image: mongo-express
+    container_name: matrix-mongo_express-4
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo-4:27017/
+      ME_CONFIG_BASICAUTH: false
+    ports:
+      - "8076:8081"
+    networks:
+      - matrix-kingdom
+
+  caddy:
+    image: caddy
+    container_name: matrix-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - matrix-kingdom
+    depends_on:
+      - worker
 
 networks:
   matrix-kingdom:
@@ -67,3 +205,9 @@ networks:
 
 volumes:
   matrix-pg_db:
+  matrix-mongo_db-1:
+  matrix-mongo_db-2:
+  matrix-mongo_db-3:
+  matrix-mongo_db-4:
+  caddy_data:
+  caddy_config:

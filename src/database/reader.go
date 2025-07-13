@@ -4,6 +4,7 @@ import (
 	"context"
 	sqlc "controller/src/database/sqlc"
 	"fmt"
+	guuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,9 @@ import (
 	"time"
 )
 
+// The Reader struct provides methods to read data from the database.
+// It uses a pgxpool.Pool for database connections and a zap.Logger for logging.
+// All methods are similar to another and the names are self-explanatory.
 type Reader struct {
 	Pool   *pgxpool.Pool
 	Logger *zap.Logger
@@ -18,19 +22,17 @@ type Reader struct {
 
 func (r *Reader) Ping(ctx context.Context) error {
 
-	r.Logger.Debug("Trying to ping sqlc")
-
 	err := r.Pool.Ping(ctx)
 	if err != nil {
 		return err
 	}
 
-	r.Logger.Debug("successfully pinged the sqlc", zap.Time("timestamp", time.Now()))
+	r.Logger.Debug("successfully pinged the database", zap.Time("timestamp", time.Now()))
 
 	return nil
 }
 
-// GetAllWorkerState retrieves the state of all workers from the sqlc in a transaction.
+// GetAllWorkerState retrieves the state of all workers
 // Returns a slice of WorkerMetric and an error if the operation fails.
 func (r *Reader) GetAllWorkerState(ctx context.Context) ([]sqlc.WorkerMetric, error) {
 
@@ -56,7 +58,33 @@ func (r *Reader) GetAllWorkerState(ctx context.Context) ([]sqlc.WorkerMetric, er
 	return workers, nil
 }
 
-// GetSingleWorkerState retrieves the state of a single worker identified by workerID from the sqlc in a transaction.
+// GetAllMWorkerState retrieves the state of all migration workers
+func (r *Reader) GetAllMWorkerState(ctx context.Context) ([]sqlc.MigrationWorker, error) {
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("beeginning transaction failed: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	q := sqlc.New(tx)
+	workers, err := q.GetAllMWorkerState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting all migration workers failed: %w", err)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return nil, fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	r.Logger.Debug("successfully got migration workers", zap.Int("count", len(workers)))
+	return workers, nil
+
+}
+
+// GetSingleWorkerState retrieves the state of a single worker identified by workerID
 // Returns the WorkerMetric of the worker and an error if the operation fails.
 func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (sqlc.WorkerMetric, error) {
 
@@ -67,9 +95,14 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (sql
 
 	defer tx.Rollback(ctx)
 
+	parsed, err := guuid.Parse(workerID)
+	if err != nil {
+		return sqlc.WorkerMetric{}, fmt.Errorf("could not parse uuid")
+	}
+
 	q := sqlc.New(tx)
 	worker, err := q.GetSingleWorkerState(ctx, pgtype.UUID{
-		Bytes: [16]byte([]byte(workerID)),
+		Bytes: parsed,
 		Valid: true,
 	})
 	if err != nil {
@@ -85,7 +118,7 @@ func (r *Reader) GetSingleWorkerState(ctx context.Context, workerID string) (sql
 	return worker, nil
 }
 
-// GetControllerState retrieves the current state of the controller from the sqlc in a transaction.
+// GetControllerState retrieves the current state of the controller
 // Returns the ControllerStatus and an error if the operation fails.
 func (r *Reader) GetControllerState(ctx context.Context) (sqlc.ControllerStatus, error) {
 
@@ -111,7 +144,7 @@ func (r *Reader) GetControllerState(ctx context.Context) (sqlc.ControllerStatus,
 	return state, nil
 }
 
-// GetWorkerCount retrieves the total number of workers from the sqlc in a transaction.
+// GetWorkerCount retrieves the total number of workers
 // Returns the count as an int and an error if the operation fails.
 func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 
@@ -137,7 +170,7 @@ func (r *Reader) GetWorkerCount(ctx context.Context) (int, error) {
 	return int(count), nil
 }
 
-// GetDBCount retrieves the total number of databases from the sqlc in a transaction.
+// GetDBCount retrieves the total number of databases
 // Returns the count as an int and an error if the operation fails.
 func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 
@@ -163,7 +196,7 @@ func (r *Reader) GetDBCount(ctx context.Context) (int, error) {
 	return int(count), nil
 }
 
-// GetDBConnErrors retrieves all sqlc connection error records from the sqlc in a transaction.
+// GetDBConnErrors retrieves all sqlc connection error records
 // Returns a slice of errors and logs the operation. Returns an error if the operation fails.
 func (r *Reader) GetDBConnErrors(ctx context.Context) ([]sqlc.DbConnErr, error) {
 
@@ -189,7 +222,7 @@ func (r *Reader) GetDBConnErrors(ctx context.Context) ([]sqlc.DbConnErr, error) 
 	return connectionErrors, nil
 }
 
-// GetFreeMigrationWorker fetches a UUID for a free migration worker from the sqlc in a transaction.
+// GetFreeMigrationWorker fetches a UUID for a free migration worker
 // Returns the worker UUID and an error if the operation fails.
 func (r *Reader) GetFreeMigrationWorker(ctx context.Context) (pgtype.UUID, error) {
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -214,6 +247,7 @@ func (r *Reader) GetFreeMigrationWorker(ctx context.Context) (pgtype.UUID, error
 	return workerUUID, nil
 }
 
+// GetAllDbInstanceInfo retrieves information about all database instances
 func (r *Reader) GetAllDbInstanceInfo(ctx context.Context) ([]sqlc.DbInstance, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -239,6 +273,7 @@ func (r *Reader) GetAllDbInstanceInfo(ctx context.Context) ([]sqlc.DbInstance, e
 
 }
 
+// GetAllDbMappingInfo retrieves information about all database mappings
 func (r *Reader) GetAllDbMappingInfo(ctx context.Context) ([]sqlc.DbMapping, error) {
 
 	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -261,5 +296,35 @@ func (r *Reader) GetAllDbMappingInfo(ctx context.Context) ([]sqlc.DbMapping, err
 
 	r.Logger.Debug("successfully got info an all db mappings", zap.Int("count", len(mappings)))
 	return mappings, nil
+
+}
+
+// GetDBMappingInfoByUrlFrom retrieves a specific database mapping by URL and from attribute
+func (r *Reader) GetDBMappingInfoByUrlFrom(ctx context.Context, url, from string) (sqlc.DbMapping, error) {
+
+	tx, err := r.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return sqlc.DbMapping{}, fmt.Errorf("beginning transaction failed: %w", err)
+	}
+
+	defer tx.Rollback(ctx)
+
+	q := sqlc.New(tx)
+	args := sqlc.GetMappingByUrlFromParams{
+		Url:  url,
+		From: from,
+	}
+	mapping, queryErr := q.GetMappingByUrlFrom(ctx, args)
+	if queryErr != nil {
+		return sqlc.DbMapping{}, fmt.Errorf("getting data on specific db mapping failed: %w", queryErr)
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return sqlc.DbMapping{}, fmt.Errorf("committing transaction failed: %w", commitErr)
+	}
+
+	r.Logger.Debug("successfully got db mapping with attributes", zap.String("from", from), zap.String("url", url))
+	return mapping, nil
 
 }
