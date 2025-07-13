@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// Controller is a struct that manages the controller's operations.
+// It contains a scheduler, a reconciler, a logger, and a flag indicating if it is in shadow mode.
+
 type Controller struct {
 	scheduler  components.Scheduler
 	reconciler components.Reconciler

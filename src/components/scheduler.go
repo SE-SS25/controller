@@ -25,12 +25,13 @@ type Scheduler struct {
 	dockerInterface docker.DInterface
 }
 
+// MigrationInfo contains all information about a migration that is relevant for the controller to display in the Terminal after an HTTP request
 type MigrationInfo struct {
-	url             string
-	maxSpace        int64
-	collectionCount int64
-	lastQueried     time.Time
-	ranges          []sqlc.DbMapping
+	Url             string
+	SpaceQuota      float64
+	CollectionCount int64
+	LastQueried     time.Time
+	Ranges          []sqlc.DbMapping
 }
 
 func NewScheduler(logger *zap.Logger, dbReader *database.Reader, readerPerf *database.ReaderPerfectionist, dbWriter *database.Writer, writerPerf *database.WriterPerfectionist, dInterface docker.DInterface) Scheduler {
@@ -49,27 +50,34 @@ type UrlToRangeStartMap map[string][]string
 
 // CalculateStartupMapping maps the alphabetical ranges to the databases that are available at startup.
 // It will fail if there are no databases available.
-// Since there is no data yet, this does not have to be considered when mapping the ranges, which is why this algorithm is different from the ones that run when the databases are filled
-func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStartMap {
+// Since there is no data yet, this does not have to be considered when mapping the ranges
+func (s *Scheduler) CalculateStartupMapping(ctx context.Context) (UrlToRangeStartMap, error) {
 
 	dbInfos, err := s.readerPerf.GetAllDbInstanceInfo(ctx)
 	if err != nil {
-		errW := fmt.Errorf("calculating startup mapping failed: %w", err)
-		s.logger.Error("error when calculating startup", zap.Error(errW))
+		s.logger.Error("error when calculating startup", zap.Error(err))
+		return nil, err
 	}
 
-	s.logger.Info("got db count when calculating startup mapping", zap.Int("dbCount", len(dbInfos)))
+	s.logger.Info("got db instance info when calculating startup mapping", zap.Int("dbCount", len(dbInfos)))
+
+	dbMappings, err := s.readerPerf.GetAllDbMappingInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("got mapping info when calculating startup mapping", zap.Int("mappingCount", len(dbMappings)))
 
 	if len(dbInfos) == 0 {
-		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("no database instances are registered"))
-		s.logger.Error("error when calculating startup mapping", zap.Error(errW))
-		return nil
+		return nil, fmt.Errorf("calculating startup mapping failed: %w", errors.New("no database instances are registered"))
 	}
 
 	if len(dbInfos) > 26 {
-		errW := fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances registered for startup: tf do you need more than 26 db instances for on startup"))
-		s.logger.Error("error when calculating startup mapping", zap.Error(errW))
-		return nil
+		return nil, fmt.Errorf("calculating startup mapping failed: %w", errors.New("too many database instances registered for startup: tf do you need more than 26 db instances for on startup"))
+	}
+
+	if len(dbMappings) != 0 {
+		return nil, fmt.Errorf("the db mappings are not empty, cannot calculate startup")
 	}
 
 	//initialize startup alphabet (a-z) without any 2nd-letter-level differentiation
@@ -87,7 +95,7 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStart
 
 	//We calculate the "exact" (-> floating point) number of the split, and then round up so that we are guaranteed to have enough space in the last database for all entries
 	splitLength := initialRangeCount / float64(len(dbInfos))
-	rangeCountPerDB := int(math.Ceil(splitLength))
+	rangeCountPerDB := int(math.Floor(splitLength))
 
 	//In the beginning, every database only gets one range since they are continuous
 	for count, v := range dbInfos {
@@ -98,7 +106,7 @@ func (s *Scheduler) CalculateStartupMapping(ctx context.Context) UrlToRangeStart
 		count++
 	}
 
-	return dbRanges
+	return dbRanges, nil
 
 }
 
@@ -109,8 +117,6 @@ func (s *Scheduler) ExecuteStartUpMapping(ctx context.Context, rangeMap UrlToRan
 	s.logger.Info("Adding mappings to registered databases", zap.Int("dbCount", len(rangeMap)))
 
 	var err error
-
-	//TODO maybe do this in one query
 
 	for url, dbRanges := range rangeMap {
 		for _, dbRangeStart := range dbRanges {
@@ -184,26 +190,31 @@ func (s *Scheduler) RunMigration(ctx context.Context, from, to, goalUrl string) 
 
 			s.logger.Info("successfully removed migration worker from database starting the container failed")
 		}
-	}
 
-	s.logger.Info("successfully created new migration worker", zap.Any("traceID", traceId))
+		s.logger.Info("successfully created new migration worker", zap.Any("traceID", traceId))
+	}
 
 	//after creating the worker in docker and db, we create the migration job for it
-	jobErr := s.writerPerf.AddMigrationJob(ctx, addReq)
+
+	migrationUUID := uuid.New()
+
+	jobErr := s.writerPerf.AddMigrationJob(ctx, addReq, migrationUUID)
 	if jobErr != nil {
-		errW := fmt.Errorf("adding migration job failed: %w", jobErr)
-		s.logger.Error("could not migrate db-range", zap.Error(errW))
-
-		return errW
+		s.logger.Error("could not migrate db-range", zap.Error(err))
+		return err
 	}
-
 	s.logger.Info("successfully added migration job to database", zap.Any("traceID", traceId))
+
+	joinErr := s.writerPerf.AddWorkerJobJoin(ctx, addReq.MWorkerId, migrationUUID.String())
+	if joinErr != nil {
+		s.logger.Error("could not migrate db-range", zap.Error(err))
+		return err
+	}
 
 	return nil
 }
 
 func (s *Scheduler) GetSystemState(ctx context.Context) ([]MigrationInfo, error) {
-
 	dbInstances, instanceErr := s.readerPerf.GetAllDbInstanceInfo(ctx)
 	if instanceErr != nil {
 		return nil, instanceErr
@@ -216,40 +227,22 @@ func (s *Scheduler) GetSystemState(ctx context.Context) ([]MigrationInfo, error)
 
 	infos := make([]MigrationInfo, 0)
 
-	var mappingMap map[string][]sqlc.DbMapping
+	mappingMap := make(map[string][]sqlc.DbMapping)
 
-	//map mappings to mappings map
 	for _, mapping := range mappings {
-
-		if mappingMap[mapping.Url] == nil {
-			mappingMap[mapping.Url] = make([]sqlc.DbMapping, 0)
-		}
-		//ah yes... i love mapping
 		mappingMap[mapping.Url] = append(mappingMap[mapping.Url], mapping)
 	}
 
-	//Match dbInstances and according mappings
 	for _, instance := range dbInstances {
-
-		var info MigrationInfo
-
-		info.url = instance.Url
-		info.maxSpace = instance.MaxSpace
-		info.collectionCount = instance.CollectionCount.Int64
-		info.lastQueried = instance.LastQueried.Time
-
-		if mappingMap[info.url] == nil {
-			info.ranges = mappingMap[info.url]
+		info := MigrationInfo{
+			Url:             instance.Url,
+			SpaceQuota:      float64(instance.OccupiedSpace.Int64) / float64(instance.MaxSpace) * 100,
+			CollectionCount: instance.CollectionCount.Int64,
+			LastQueried:     instance.LastQueried.Time,
+			Ranges:          mappingMap[instance.Url],
 		}
-		//there are no ranges on a db instance (its empty)
-
 		infos = append(infos, info)
 	}
 
 	return infos, nil
-
-}
-
-func (s *Scheduler) Scale(ctx context.Context, delta int) {
-
 }

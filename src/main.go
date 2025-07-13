@@ -137,10 +137,11 @@ func main() {
 
 		go controller.heartbeat(ctx)
 
+	} else {
+		time.Sleep(3 * time.Second)
+		//If this controller is the shadow, it should get stuck in this function
+		controller.checkControllerUp(ctx)
 	}
-
-	//If this controller is the shadow, it should get stuck in this function
-	controller.checkControllerUp(ctx)
 
 	timeout := goutils.Log().ParseEnvDurationDefault("WORKER_HEARTBEAT_TIMEOUT", 5*time.Second, logger)
 

@@ -44,6 +44,7 @@ func (r *Reconciler) PingDB(ctx context.Context) error {
 
 	return nil
 }
+
 func (r *Reconciler) Heartbeat(ctx context.Context) error {
 
 	//We don't make the controller terminate here since its trying to ping the database every second anyway, and if that fails it will shut off
@@ -114,16 +115,12 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 		return err
 	}
 
-	//TODO I think this part can potentially cause big latency if we backoff with every retry
-	//Thats problematic because as long as the function is stuck here, the rest of th workers arent checked
-	//Maybe i can execute the remove retries in goroutines?
-	//maybe refactor this ugly as hell
 	for _, worker := range workers {
 
 		r.logger.Debug("Reading data for worker", zap.String("uuid", worker.ID.String()))
 
 		//Delay = time_since_last_heartbeat - specified_heartbeat_frequency
-		err = workerHeartbeatOK(worker.LastHeartbeat, timeout, r.logger)
+		err = workerHeartbeatOK(worker.LastHeartbeat, timeout)
 		if err != nil {
 
 			go func() {
@@ -131,9 +128,9 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 
 				//Recheck the state of the worker to see if it still recovers, if it doesn't remove it
 				workerState, dbErr := r.readerPerf.GetSingleWorkerState(ctx, worker.ID.String())
-				if dbErr != nil || workerHeartbeatOK(workerState.LastHeartbeat, timeout, r.logger) != nil {
+				if dbErr != nil || workerHeartbeatOK(workerState.LastHeartbeat, timeout) != nil {
 
-					r.logger.Warn("worker did not recover or could not be fetched from db; removing...", zap.String("workerId", worker.ID.String()), zap.NamedError("dbErr", err), zap.Bool("heartBeatOk", workerHeartbeatOK(worker.LastHeartbeat, timeout, r.logger) == nil))
+					r.logger.Warn("worker did not recover or could not be fetched from db; removing...", zap.String("workerId", worker.ID.String()), zap.NamedError("dbErr", err), zap.Bool("heartBeatOk", workerHeartbeatOK(worker.LastHeartbeat, timeout) == nil))
 
 					if removeErr := r.writerPerf.RemoveWorker(worker.ID, ctx); err != nil {
 						r.logger.Error("could not remove non-functional worker from table", zap.String("workerId", worker.ID.String()), zap.Error(removeErr))
@@ -172,6 +169,9 @@ func (r *Reconciler) EvaluateWorkerState(ctx context.Context, timeout time.Durat
 
 }
 
+// EvaluateMigrationWorkerState evaluates the state of all migration workers in the system.
+// It checks if the workers have a valid heartbeat and uptime, and removes them from the database if they do not.
+// This function should be called in a goroutine to be executed in the background
 func (r *Reconciler) EvaluateMigrationWorkerState(ctx context.Context) error {
 
 	migrationWorkerState, err := r.readerPerf.GetAllMWorkerState(ctx)
@@ -187,14 +187,15 @@ func (r *Reconciler) EvaluateMigrationWorkerState(ctx context.Context) error {
 
 		workersPresent = true
 
-		//TODO: ignoring the uptime for now
-		err = workerHeartbeatOK(worker.LastHeartbeat, maxAgeHeartbeat, r.logger)
+		r.logger.Debug("time and migration worker heartbeat", zap.String("workerId", worker.ID.String()), zap.Time("current", time.Now()), zap.Time("heartbeat", worker.LastHeartbeat.Time))
+
+		err = workerHeartbeatOK(worker.LastHeartbeat, maxAgeHeartbeat)
 		if err != nil {
 			r.logger.Warn("heartbeat for migration worker was not ok, removing from the database", zap.String("workerId", worker.ID.String()))
 
-			err = r.writerPerf.RemoveMigrationWorker(worker.ID.String(), ctx)
+			err = r.writerPerf.RemoveMWorkerAndJobs(ctx, worker.ID.String())
 			if err != nil {
-				r.logger.Error("could not remove migration worker from the table")
+				r.logger.Error("could not remove migration worker from the table", zap.Error(err))
 			}
 
 		}
@@ -286,7 +287,7 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 	for i, workerID := range workerList {
 		for j, dbURL := range dbList {
 			errorCount := errorToFrequency[i][j]
-			if errorCount > 5 {
+			if errorCount > 3 {
 				warnings = append(warnings, fmt.Sprintf("Worker %s + Database %s: %d errors", workerID, dbURL, errorCount))
 			}
 		}
@@ -298,7 +299,7 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 		for j := 0; j < len(dbList); j++ {
 			rowSum += errorToFrequency[i][j]
 		}
-		if rowSum > 5 {
+		if rowSum > 3 {
 			warnings = append(warnings, fmt.Sprintf("Worker %s (all databases): %d errors", workerID, rowSum))
 		}
 	}
@@ -309,7 +310,7 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 		for i := 0; i < len(workerList); i++ {
 			colSum += errorToFrequency[i][j]
 		}
-		if colSum > 5 {
+		if colSum > 3 {
 			warnings = append(warnings, fmt.Sprintf("Database %s (all workers): %d errors", dbURL, colSum))
 		}
 	}
@@ -319,7 +320,7 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 		r.logger.Warn("high failure rates detected in the last 30 minutes",
 			zap.Strings("warnings", warnings))
 	} else {
-		r.logger.Debug("no high failure rates detected in the last 30 minutes")
+		r.logger.Info("no high failure rates detected in the last 30 minutes")
 	}
 
 	return nil
@@ -327,7 +328,7 @@ func (r *Reconciler) CheckFailureRate(ctx context.Context) error {
 
 // workerHeartbeatOK checks if a worker's last heartbeat is valid and within the allowed timeout.
 // Returns an error if the heartbeat is invalid or delayed beyond the timeout, otherwise returns nil.
-func workerHeartbeatOK(heartbeat pgtype.Timestamptz, timeout time.Duration, logger *zap.Logger) error {
+func workerHeartbeatOK(heartbeat pgtype.Timestamptz, timeout time.Duration) error {
 
 	if heartbeat.Valid == false {
 		return fmt.Errorf("heartbeat of worker does not have a valid return from pg")

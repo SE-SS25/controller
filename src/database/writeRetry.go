@@ -4,12 +4,16 @@ import (
 	"context"
 	oe "controller/src/errors"
 	utils "controller/src/utils"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	goutils "github.com/linusgith/goutils/pkg/env_utils"
 	"go.uber.org/zap"
 	"time"
 )
 
+// WriterPerfectionist is a wrapper around the Writer that retries operations with a backoff strategy
+// and handles reconcilable errors. It is used to ensure that operations are retried
+// in case of temporary failures, while also allowing for a maximum number of retries.
 type WriterPerfectionist struct {
 	writer         *Writer
 	maxRetries     int
@@ -19,10 +23,8 @@ type WriterPerfectionist struct {
 
 func NewWriterPerfectionist(writer *Writer) *WriterPerfectionist {
 
-	//TODO ugly with the loggers
-
 	//15 ms in exp backoff gives us [15,225, 3375] ms as backoff intervals
-	//we shouldn't allow a long backoff for the controller since shit can hit the fan fast
+
 	initBackoff := goutils.Log().ParseEnvDurationDefault("INIT_RETRY_BACKOFF", 15*time.Millisecond, writer.Logger)
 
 	maxRetries := goutils.Log().ParseEnvIntDefault("MAX_RETRIES", 3, writer.Logger)
@@ -51,6 +53,7 @@ func NewWriterPerfectionist(writer *Writer) *WriterPerfectionist {
 	}
 }
 
+// RemoveWorker removes a worker from the database with retries and backoff.
 func (w *WriterPerfectionist) RemoveWorker(uuid pgtype.UUID, ctx context.Context) error {
 
 	var err oe.DbError
@@ -77,6 +80,7 @@ func (w *WriterPerfectionist) RemoveWorker(uuid pgtype.UUID, ctx context.Context
 
 }
 
+// AddMigrationWorker adds a migration worker to the database with retries and backoff.
 func (w *WriterPerfectionist) AddMigrationWorker(uuid, from, to string, ctx context.Context) error {
 
 	var err oe.DbError
@@ -84,7 +88,6 @@ func (w *WriterPerfectionist) AddMigrationWorker(uuid, from, to string, ctx cont
 	for i := 1; i <= w.maxRetries; i++ {
 		err = w.writer.AddMigrationWorker(ctx, uuid, from, to)
 		if err.Err == nil {
-			w.writer.Logger.Info("add migration worker error is nil")
 			return nil
 		}
 
@@ -104,6 +107,7 @@ func (w *WriterPerfectionist) AddMigrationWorker(uuid, from, to string, ctx cont
 
 }
 
+// RemoveMigrationWorker removes a migration worker from the database with retries and backoff.
 func (w *WriterPerfectionist) RemoveMigrationWorker(uuid string, ctx context.Context) error {
 
 	var err oe.DbError
@@ -130,6 +134,61 @@ func (w *WriterPerfectionist) RemoveMigrationWorker(uuid string, ctx context.Con
 
 }
 
+// AddWorkerJobJoin adds a join from a migration worker to a job with retries and backoff.
+func (w *WriterPerfectionist) AddWorkerJobJoin(ctx context.Context, workerId, migrationId string) error {
+
+	var err oe.DbError
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.AddWorkerJobJoin(ctx, workerId, migrationId)
+		if err.Err == nil {
+			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("adding join from migration worker and job failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("adding join from migration worker and job failed, retry limit reached", zap.Int("retry", w.maxRetries), zap.Error(err))
+	return err
+
+}
+
+// RemoveMWorkerAndJobs removes a migration worker and its associated jobs with retries and backoff.
+func (w *WriterPerfectionist) RemoveMWorkerAndJobs(ctx context.Context, workerId string) error {
+
+	var err oe.DbError
+
+	for i := 1; i <= w.maxRetries; i++ {
+		err = w.writer.RemoveMWorkerAndJobs(ctx, workerId)
+		if err.Err == nil {
+			return nil
+		}
+
+		if !err.Reconcilable {
+			return err
+		}
+
+		if i < w.maxRetries {
+			w.writer.Logger.Warn("removing migration worker failed; retrying...", zap.Int("try", i), zap.Error(err))
+
+			utils.CalculateAndExecuteBackoff(i, w.initialBackoff)
+		}
+	}
+
+	w.writer.Logger.Error("removing migration worker failed, retry limit reached", zap.Int("retry", w.maxRetries), zap.Error(err))
+	return err
+
+}
+
+// AddDatabaseMapping adds a database mapping with retries and backoff.
 func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.Context) error {
 	var err oe.DbError
 
@@ -154,12 +213,13 @@ func (w *WriterPerfectionist) AddDatabaseMapping(from, url string, ctx context.C
 	return err
 }
 
-func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq) error {
+// AddMigrationJob adds a migration job with retries and backoff.
+func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq, migrationId uuid.UUID) error {
 
 	var err oe.DbError
 
 	for i := 1; i <= w.maxRetries; i++ {
-		err = w.writer.AddMigrationJob(ctx, addReq)
+		err = w.writer.AddMigrationJob(ctx, addReq, migrationId)
 		if err.Err == nil {
 			return nil
 		}
@@ -179,6 +239,7 @@ func (w *WriterPerfectionist) AddMigrationJob(ctx context.Context, addReq Migrat
 	return err
 }
 
+// DeleteDBConnErrors deletes outdated database connection errors with retries and backoff.
 func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgtype.Text, workerId pgtype.UUID, timestamp pgtype.Timestamptz) error {
 
 	var err oe.DbError
@@ -205,6 +266,7 @@ func (w *WriterPerfectionist) DeleteDBConnErrors(ctx context.Context, dbUrl pgty
 
 }
 
+// Heartbeat sends a heartbeat signal to the database with retries and backoff.
 func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
 
 	var err oe.DbError
@@ -231,6 +293,7 @@ func (w *WriterPerfectionist) Heartbeat(ctx context.Context) error {
 	return err
 }
 
+// RegisterController registers a controller with the database with retries and backoff.
 func (w *WriterPerfectionist) RegisterController(ctx context.Context) error {
 
 	var err oe.DbError

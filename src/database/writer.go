@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// Writer is a struct that provides methods to write to the database.
+// It contains a logger for logging operations and a connection pool for database interactions.
+// The methods are very similar and the names are self-explanatory.
 type Writer struct {
 	Logger *zap.Logger
 	Pool   *pgxpool.Pool
@@ -47,6 +50,7 @@ func (w *Writer) RemoveWorker(ctx context.Context, uuid pgtype.UUID) oe.DbError 
 	return oe.DbError{Err: nil}
 }
 
+// AddMigrationWorker adds a new migration worker to the database with the specified UUID, from, and to values.
 func (w *Writer) AddMigrationWorker(ctx context.Context, uuid, from, to string) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -98,13 +102,12 @@ func (w *Writer) AddMigrationWorker(ctx context.Context, uuid, from, to string) 
 		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
 	}
 
-	select {}
-
 	w.Logger.Debug("successfully added migration worker", zap.String("worker_uuid", uuid))
 	return oe.DbError{Err: nil}
 
 }
 
+// RemoveMigrationWorker removes a migration worker from the database by UUID.
 func (w *Writer) RemoveMigrationWorker(ctx context.Context, uuid string) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
@@ -120,7 +123,19 @@ func (w *Writer) RemoveMigrationWorker(ctx context.Context, uuid string) oe.DbEr
 	}
 
 	q := database.New(tx)
-	execRes, execErr := q.DeleteMigrationWorker(ctx, pgtype.UUID{
+
+	args := database.DeleteWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: parsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.DeleteWorkerJobJoin(ctx, args)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	execRes, execErr = q.DeleteMigrationWorker(ctx, pgtype.UUID{
 		Bytes: parsed,
 		Valid: true,
 	})
@@ -134,6 +149,104 @@ func (w *Writer) RemoveMigrationWorker(ctx context.Context, uuid string) oe.DbEr
 	}
 
 	w.Logger.Debug("successfully removed migration worker", zap.String("worker_uuid", uuid))
+	return oe.DbError{Err: nil}
+
+}
+
+// AddWorkerJobJoin adds a relationship between a worker and a migration job in the database.
+func (w *Writer) AddWorkerJobJoin(ctx context.Context, workerId, migrationId string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	workerParsed, err := guuid.Parse(workerId)
+	migrationParsed, err := guuid.Parse(migrationId)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid: %v", err), Reconcilable: false}
+	}
+
+	q := database.New(tx)
+	params := database.CreateWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: workerParsed,
+			Valid: true,
+		},
+		MigrationID: pgtype.UUID{
+			Bytes: migrationParsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.CreateWorkerJobJoin(ctx, params)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully added relationship between worker and migration job", zap.String("workerId", workerId), zap.String("jobId", migrationId))
+	return oe.DbError{Err: nil}
+}
+
+// RemoveMWorkerAndJobs removes a migration worker and all its associated jobs from the database.
+func (w *Writer) RemoveMWorkerAndJobs(ctx context.Context, workerId string) oe.DbError {
+
+	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("beginning transaction: %w", err), Reconcilable: true}
+	}
+
+	defer tx.Rollback(ctx)
+
+	parsed, err := guuid.Parse(workerId)
+	if err != nil {
+		return oe.DbError{Err: fmt.Errorf("could not parse uuid"), Reconcilable: false}
+	}
+
+	//In one transaction, remove the jobs first and then the migration worker (else there will be a fk constraint err)
+	q := database.New(tx)
+
+	args := database.DeleteWorkerJobJoinParams{
+		WorkerID: pgtype.UUID{
+			Bytes: parsed,
+			Valid: true,
+		},
+	}
+	execRes, execErr := q.DeleteWorkerJobJoin(ctx, args)
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	execRes, execErr = q.DeleteWorkerJob(ctx, pgtype.UUID{
+		Bytes: parsed,
+		Valid: true,
+	})
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	w.Logger.Debug("successfully removed worker jobs", zap.String("workerId", workerId))
+
+	execRes, execErr = q.DeleteMigrationWorker(ctx, pgtype.UUID{
+		Bytes: parsed,
+		Valid: true,
+	})
+	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {
+		return oeErr
+	}
+
+	commitErr := tx.Commit(ctx)
+	if commitErr != nil {
+		return oe.DbError{Err: fmt.Errorf("committing transaction failed: %w", commitErr), Reconcilable: true}
+	}
+
+	w.Logger.Debug("successfully removed migration worker and its jobs", zap.String("worker_uuid", workerId))
 	return oe.DbError{Err: nil}
 
 }
@@ -172,6 +285,7 @@ func (w *Writer) AddDatabaseMapping(from, url string, ctx context.Context) oe.Db
 	return oe.DbError{Err: nil}
 }
 
+// MigrationJobAddReq is a struct that holds the parameters required to add a migration job.
 type MigrationJobAddReq struct {
 	From, To, Url, MWorkerId string
 }
@@ -179,7 +293,7 @@ type MigrationJobAddReq struct {
 // AddMigrationJob takes a range with a given id from the mapping table and transfers it into the migrations table,
 // marking it to be migrated by the migration worker specified through the id. Executes within a transaction.
 // Returns an error if the operation fails.
-func (w *Writer) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq) oe.DbError {
+func (w *Writer) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq, migrationJobId uuid.UUID) oe.DbError {
 
 	tx, err := w.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -195,13 +309,18 @@ func (w *Writer) AddMigrationJob(ctx context.Context, addReq MigrationJobAddReq)
 
 	q := database.New(tx)
 	params := database.CreateMigrationJobParams{
-		Url:  addReq.Url,
-		From: addReq.From,
-		To:   addReq.To,
+		ID: pgtype.UUID{
+			Bytes: migrationJobId,
+			Valid: true,
+		},
+		Url: addReq.Url,
 		MWorkerID: pgtype.UUID{
 			Bytes: parsed,
 			Valid: true,
 		},
+		From:   addReq.From,
+		To:     addReq.To,
+		Status: "waiting", //status after creation always waiting
 	}
 	execRes, execErr := q.CreateMigrationJob(ctx, params)
 	if oeErr := utils.Must(execRes, execErr); oeErr.Err != nil {

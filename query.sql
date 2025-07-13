@@ -45,6 +45,11 @@ FROM db_instance;
 SELECT *
 FROM db_mapping;
 
+-- name: GetMappingByUrlFrom :one
+SELECT *
+FROM db_mapping
+WHERE url = $1
+  AND "from" = $2;
 
 -- name: DeleteWorker :execresult
 DELETE
@@ -60,21 +65,28 @@ DELETE
 FROM migration_worker
 WHERE id = $1;
 
+-- name: DeleteWorkerJob :execresult
+DELETE
+FROM db_migration
+WHERE m_worker_id = $1;
+
+-- name: DeleteWorkerJobJoin :execresult
+DELETE
+FROM migration_worker_jobs
+WHERE migration_id = $1
+   OR worker_id = $2;
+
+-- name: CreateWorkerJobJoin :execresult
+INSERT INTO migration_worker_jobs (worker_id, migration_id)
+VALUES ($1, $2);
+
 -- name: CreateMapping :execresult
 INSERT INTO db_mapping(id, url, "from", size)
 VALUES ($1, $2, $3, 0);
 
 -- name: CreateMigrationJob :execresult
 INSERT INTO db_migration (id, url, m_worker_id, "from", "to", status)
-SELECT db_mapping.id,
-       db_mapping.url,
-       $4, -- m_worker_id parameter
-       db_mapping."from",
-       $3, -- "to" parameter
-       'waiting'
-FROM db_mapping
-WHERE db_mapping.url = $1
-  AND db_mapping."from" = $2;
+VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: DeleteDBConnError :execresult
 DELETE

@@ -12,6 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// DInterface provides an interface to interact with Docker containers for the migration worker.
+// It allows for creating migration worker containers.
 type DInterface struct {
 	logger      *zap.Logger
 	client      *dockerclient.Client
@@ -19,6 +21,7 @@ type DInterface struct {
 	mWorkerChan chan CreateRequest
 }
 
+// CreateRequest represents a request to create migration worker.
 type CreateRequest struct {
 	ctx          context.Context
 	workerId     string
@@ -44,6 +47,7 @@ func New(logger *zap.Logger) (DInterface, error) {
 	return dockerInterface, nil
 }
 
+// Ping checks if the Docker client is able to communicate with the Docker daemon.
 func (d *DInterface) Ping(ctx context.Context) error {
 
 	_, err := d.client.Ping(ctx)
@@ -54,65 +58,33 @@ func (d *DInterface) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Run starts the main loop of the DInterface, which listens for requests to create migration workers.
 func (d *DInterface) Run() {
 
 	for {
+		req := <-d.mWorkerChan //accept requests to create migration worker
+		d.logger.Info("received request to start new migration worker")
+
+		funcRes := make(chan error, 1)
+		go func() {
+			funcRes <- d.startMigrationWorker(req)
+		}()
+
+		//either the context is canceled or we get a result from the create migration worker func
 		select {
-		case req := <-d.workerChan: //accept requests to create workers
-
-			d.logger.Info("received request to start new worker")
-
-			funcRes := make(chan error, 1)
-			go func() {
-				//TODO
-			}()
-
-			//either the context is canceled or we get a result from the create worker func
-			select {
-			case <-req.ctx.Done():
-				req.ResponseChan <- req.ctx.Err()
-			case e := <-funcRes:
+		case <-req.ctx.Done():
+			req.ResponseChan <- req.ctx.Err()
+		case e := <-funcRes:
+			if e != nil {
 				req.ResponseChan <- fmt.Errorf("there was an error creating the migration worker: %v", e)
+				continue
 			}
-
-		case req := <-d.mWorkerChan: //accept requests to create migration worker
-			d.logger.Info("received request to start new migration worker")
-
-			funcRes := make(chan error, 1)
-			go func() {
-				funcRes <- d.startMigrationWorker(req)
-			}()
-
-			//either the context is canceled or we get a result from the create migration worker func
-			select {
-			case <-req.ctx.Done():
-				req.ResponseChan <- req.ctx.Err()
-			case e := <-funcRes:
-				if e != nil {
-					req.ResponseChan <- fmt.Errorf("there was an error creating the migration worker: %v", e)
-					continue
-				}
-				req.ResponseChan <- nil
-			}
+			req.ResponseChan <- nil
 		}
 	}
 }
 
-func (d *DInterface) SendWorkerRequest(ctx context.Context) CreateRequest {
-
-	respChannel := make(chan error, 1)
-
-	req := CreateRequest{
-		ctx:          ctx,
-		ResponseChan: respChannel,
-	}
-
-	d.workerChan <- req
-
-	return req
-
-}
-
+// SendMWorkerRequest sends a request to create a migration worker with a specific worker ID.
 func (d *DInterface) SendMWorkerRequest(ctx context.Context, workerId string) CreateRequest {
 
 	respChannel := make(chan error, 1)
@@ -129,6 +101,7 @@ func (d *DInterface) SendMWorkerRequest(ctx context.Context, workerId string) Cr
 
 }
 
+// startMigrationWorker creates and starts a Docker container for the migration worker.
 func (d *DInterface) startMigrationWorker(req CreateRequest) error {
 
 	ctx := req.ctx
@@ -162,6 +135,7 @@ func (d *DInterface) startMigrationWorker(req CreateRequest) error {
 
 }
 
+// createContainerConfig creates a container configuration for the migration worker.
 func createContainerConfig(imageTag string, workerId string) *container.Config {
 	return &container.Config{
 		Image: imageTag,
@@ -169,15 +143,20 @@ func createContainerConfig(imageTag string, workerId string) *container.Config {
 			"50052/tcp": struct{}{},
 		},
 		Env: []string{
-			"PG_CONN", goutils.NoLog().ParseEnvStringPanic("PG_CONN"),
-			"UUID", workerId,
-			"APP_ENV", goutils.NoLog().ParseEnvStringPanic("APP_ENV"),
-			"RETRIES", "5",
-			"HEARTBEAT_BACKOFF", "3",
+			"PG_CONN=" + goutils.NoLog().ParseEnvStringPanic("PG_CONN"),
+			"UUID=" + workerId,
+			"APP_ENV=" + goutils.NoLog().ParseEnvStringPanic("APP_ENV"),
+			"RETRIES=" + "5",
+			"HEARTBEAT_BACKOFF=" + "3",
+			"BACKOFF_TYPE=" + "exp",
+			"INIT_RETRY_BACKOFF=" + "15ms",
+			"MAX_BACKOFF=" + "5m",
+			"HEARTBEAT_BACKOFF=" + "3s",
 		},
 	}
 }
 
+// createHostConfig creates a host configuration for the migration worker container.
 func createHostConfig() *container.HostConfig {
 	return &container.HostConfig{
 		AutoRemove:  false, //TODO

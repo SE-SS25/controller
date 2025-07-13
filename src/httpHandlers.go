@@ -8,10 +8,13 @@ import (
 	"os"
 )
 
+// RunHttpServer starts the HTTP server for the controller.
+// It sets up handlers for migration, startup mapping, health checks, and system state.
 func (c *Controller) RunHttpServer() {
 	http.Handle("/migrate", c.migrationHandler())
 	http.Handle("/mapping/startup", c.startupMapping())
 	http.Handle("/health", c.health())
+	http.Handle("/state", c.systemStateHandler())
 
 	var port string
 	var err error
@@ -32,7 +35,8 @@ func (c *Controller) RunHttpServer() {
 	c.logger.Info("Started http server", zap.String("port", port))
 }
 
-func (c *Controller) getSystemStateHandler() http.HandlerFunc {
+// systemStateHandler returns an HTTP handler that retrieves the system state.
+func (c *Controller) systemStateHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		if c.isShadow {
@@ -51,7 +55,7 @@ func (c *Controller) getSystemStateHandler() http.HandlerFunc {
 			return
 		}
 
-		jsonBytes, parseErr := json.Marshal(migrationInfos)
+		jsonBytes, parseErr := json.MarshalIndent(migrationInfos, "", " ")
 		if parseErr != nil {
 			c.logger.Warn("could not parse migration infos to json", zap.Error(parseErr))
 			w.WriteHeader(http.StatusInternalServerError)
@@ -97,7 +101,7 @@ func (c *Controller) migrationHandler() http.HandlerFunc {
 
 		err := c.scheduler.RunMigration(ctx, from, to, goalUrl)
 		if err != nil {
-			c.logger.Error("could not migrate db-range", zap.Error(err))
+			c.logger.Error("could not run migration", zap.Error(err))
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusInternalServerError)
 			_, httpErr := w.Write([]byte(err.Error()))
@@ -117,8 +121,6 @@ func (c *Controller) migrationHandler() http.HandlerFunc {
 func (c *Controller) health() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		c.logger.Debug("pinging the database")
-
 		err := c.reconciler.PingDB(r.Context())
 		if err != nil {
 			w.WriteHeader(http.StatusFailedDependency)
@@ -132,7 +134,11 @@ func (c *Controller) startupMapping() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		mapping := c.scheduler.CalculateStartupMapping(ctx)
+		mapping, err := c.scheduler.CalculateStartupMapping(ctx)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 
 		c.scheduler.ExecuteStartUpMapping(ctx, mapping)
 	}

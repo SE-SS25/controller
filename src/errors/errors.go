@@ -12,6 +12,8 @@ var (
 	ErrCreateTimeout     = errors.New("request for container creation timed out")
 )
 
+// DbError represents an error that occurred while interacting with the database.
+// It includes the original error and a flag indicating whether the error is reconcilable.
 type DbError struct {
 	Err          error
 	Reconcilable bool

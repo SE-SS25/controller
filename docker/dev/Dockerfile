@@ -6,8 +6,6 @@ COPY ./go.sum .
 COPY ./go.mod .
 
 COPY ./migrations ./migrations
-COPY ./gomigrate ./gomigrate
-
 ENV APP_ENV=dev
 
 RUN go mod tidy

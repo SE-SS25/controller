@@ -1,0 +1,10 @@
+:80 {
+	reverse_proxy {
+		dynamic a {
+			name worker
+			port 8080
+			refresh 10s
+		}
+		lb_policy round_robin
+	}
+}
